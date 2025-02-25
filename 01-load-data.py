@@ -38,32 +38,104 @@ if antique_dir.exists():
 ##############################################################################
 # 4) Load ANTIQUE and create a pandas DataFrame
 ##############################################################################
+# import ir_datasets
+# import pandas as pd
+
+# print("Loading ANTIQUE dataset...")
+# dataset = ir_datasets.load("antique")
+
+# documents = []
+# for doc in dataset.docs_iter():
+#     documents.append({"doc_id": doc.doc_id, "text": doc.text})
+
+# df = pd.DataFrame(documents)
+# print("Initial DataFrame created.")
+# print(df.head())
+
+# ##############################################################################
+# # 5) Shuffle the DataFrame, then split into train/validation CSVs
+# ##############################################################################
+# df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+# # Create the splits
+# train_df = df.iloc[:6500]          # first 6,500 documents
+# valid_df = df.iloc[6500:6500+2200] # next 2,200 documents
+
+# # Save to CSV
+# train_df.to_csv("antique_train_split.csv", index=False)
+# valid_df.to_csv("antique_valid_split.csv", index=False)
+
+# print(f"Train set: {len(train_df)} documents -> antique_train_split.csv")
+# print(f"Valid set: {len(valid_df)} documents -> antique_valid_split.csv")
+
 import ir_datasets
 import pandas as pd
 
-print("Loading ANTIQUE dataset...")
-dataset = ir_datasets.load("antique")
+# Ensure 'data/' directory exists
+data_dir = "data"
+os.makedirs(data_dir, exist_ok=True)
 
-documents = []
-for doc in dataset.docs_iter():
-    documents.append({"doc_id": doc.doc_id, "text": doc.text})
+# Define datasets to download
+datasets = {
+    "antique": "antique",
+    "antique_test": "antique/test",
+    "antique_test_non_offensive": "antique/test/non-offensive",
+    "antique_train": "antique/train",
+    "antique_train_split200_train": "antique/train/split200-train",
+    "antique_train_split200_valid": "antique/train/split200-valid"
+}
 
-df = pd.DataFrame(documents)
-print("Initial DataFrame created.")
-print(df.head())
+# Function to fetch and save documents
+def save_documents(dataset_name, dataset):
+    documents = []
+    for doc in dataset.docs_iter():
+        documents.append({"doc_id": doc.doc_id, "text": doc.text})
 
-##############################################################################
-# 5) Shuffle the DataFrame, then split into train/validation CSVs
-##############################################################################
-df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    df = pd.DataFrame(documents)
+    file_path = os.path.join(data_dir, f"{dataset_name}_docs.csv")
+    df.to_csv(file_path, index=False)
+    print(f"Saved {file_path} with {len(df)} records.")
 
-# Create the splits
-train_df = df.iloc[:6500]          # first 6,500 documents
-valid_df = df.iloc[6500:6500+2200] # next 2,200 documents
+# Function to fetch and save queries
+def save_queries(dataset_name, dataset):
+    queries = []
+    for query in dataset.queries_iter():
+        queries.append({"query_id": query.query_id, "text": query.text})
 
-# Save to CSV
-train_df.to_csv("antique_train_split.csv", index=False)
-valid_df.to_csv("antique_valid_split.csv", index=False)
+    df = pd.DataFrame(queries)
+    file_path = os.path.join(data_dir, f"{dataset_name}_queries.csv")
+    df.to_csv(file_path, index=False)
+    print(f"Saved {file_path} with {len(df)} records.")
 
-print(f"Train set: {len(train_df)} documents -> antique_train_split.csv")
-print(f"Valid set: {len(valid_df)} documents -> antique_valid_split.csv")
+# Function to fetch and save qrels (query relevance judgments)
+def save_qrels(dataset_name, dataset):
+    qrels = []
+    for qrel in dataset.qrels_iter():
+        qrels.append({
+            "query_id": qrel.query_id,
+            "doc_id": qrel.doc_id,
+            "relevance": qrel.relevance,
+            "iteration": getattr(qrel, "iteration", None)  # Some datasets have 'iteration', some don't
+        })
+
+    df = pd.DataFrame(qrels)
+    file_path = os.path.join(data_dir, f"{dataset_name}_qrels.csv")
+    df.to_csv(file_path, index=False)
+    print(f"Saved {file_path} with {len(df)} records.")
+
+# Iterate through datasets and save each component
+for name, path in datasets.items():
+    dataset = ir_datasets.load(path)
+    
+    # Save documents
+    save_documents(name, dataset)
+
+    # Save queries if available
+    if hasattr(dataset, "queries_iter"):
+        save_queries(name, dataset)
+
+    # Save qrels if available
+    if hasattr(dataset, "qrels_iter"):
+        save_qrels(name, dataset)
+
+print("All datasets have been saved in the 'data/' folder!")
