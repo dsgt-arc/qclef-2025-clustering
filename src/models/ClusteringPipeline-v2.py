@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from src.models.UMAPReducer import UMAPReducer
 from src.models.ClassicalClustering import ClassicalClustering
 from src.models.QuantumClustering import QuantumClustering
@@ -105,20 +106,67 @@ def run_qubo_solver():
     data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
     
     qubo_matrix_path = os.path.join(data_dir, "qubo_matrix.npy")
-    
-    if not os.path.exists(qubo_matrix_path):
-        raise FileNotFoundError(f"Saved QUBO matrix not found at: {qubo_matrix_path}")
+    medoid_indices_path = os.path.join(data_dir, "medoid_indices.npy")
+    doc_embeddings_path = os.path.join(data_dir, "doc_embeddings_reduced.npy")
+    clustered_output_path = os.path.join(data_dir, "final_quantum_clusters.npy")
+
+    if not os.path.exists(qubo_matrix_path) or not os.path.exists(medoid_indices_path) or not os.path.exists(doc_embeddings_path):
+        raise FileNotFoundError("Missing QUBO matrix, medoid indices, or document embeddings.")
 
     qubo_matrix = np.load(qubo_matrix_path)
-    n_clusters = len(qubo_matrix)
+    medoid_indices = np.load(medoid_indices_path)
+    doc_embeddings = np.load(doc_embeddings_path)
+
+    n_clusters = len(medoid_indices)
 
     solver = QuboSolver(qubo_matrix, n_clusters)
-    cluster_assignments = solver.run_QuboSolver()
+    medoid_cluster_labels = solver.run_QuboSolver()
 
-    clustered_output_path = os.path.join(data_dir, "final_quantum_clusters.npy")
-    np.save(clustered_output_path, cluster_assignments)
+    from sklearn.metrics.pairwise import euclidean_distances
+
+    medoid_embeddings = doc_embeddings[medoid_indices]
+    distances = euclidean_distances(doc_embeddings, medoid_embeddings)
+
+    closest_medoid = np.argmin(distances, axis=1)
+    all_labels = np.array([medoid_cluster_labels[idx] for idx in closest_medoid])
+
+    np.save(clustered_output_path, all_labels)
 
     print(f"Final optimized quantum cluster assignments saved at: {clustered_output_path}")
+
+
+def run_final_cluster_visualization():
+    """Visualizes the final quantum cluster assignments after QUBO solving."""
+    np.random.seed(42)
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
+
+    embeddings_path = os.path.join(data_dir, "doc_embeddings_reduced.npy")
+    cluster_labels_path = os.path.join(data_dir, "final_quantum_clusters.npy")
+
+    if not os.path.exists(embeddings_path) or not os.path.exists(cluster_labels_path):
+        raise FileNotFoundError("Missing embeddings or cluster labels file.")
+
+    embeddings = np.load(embeddings_path)
+    cluster_labels = np.load(cluster_labels_path)
+
+    unique_labels = np.unique(cluster_labels)
+    label_mapping = {old_label: new_label for new_label, old_label in enumerate(unique_labels)}
+    normalized_labels = np.array([label_mapping[label] for label in cluster_labels])
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(embeddings[:, 0], embeddings[:, 1], c=normalized_labels, cmap='Spectral', s=20, alpha=0.7)
+    plt.colorbar(label="Cluster Labels")
+    plt.title("Final Quantum Cluster Assignments")
+    plt.xlabel("UMAP Dimension 1")
+    plt.ylabel("UMAP Dimension 2")
+
+    plot_path = os.path.join(data_dir, "final_quantum_clusters_plot.png")
+    plt.savefig(plot_path, dpi=300)
+    plt.show()
+
+    print(f"Cluster visualization saved at: {plot_path}")
 
 
 class ClusteringPipeline:
@@ -128,6 +176,7 @@ class ClusteringPipeline:
         run_classical_clustering()
         run_quantum_clustering()
         run_qubo_solver()
+        run_final_cluster_visualization()
         print("Clustering Pipeline Completed.")
 
 

@@ -25,10 +25,10 @@ class UMAPReducer:
         """Visualizes the reduced embeddings in a scatter plot and saves the figure if save_path is provided."""
         fig, ax = plt.subplots(figsize=(8, 6))
         if labels is not None:
-            scatter = ax.scatter(reduced_embeddings[:, 0], reduced_embeddings[:, 1], c=labels, cmap='Spectral', s=5)
+            scatter = ax.scatter(reduced_embeddings[:, 0], reduced_embeddings[:, 1], c=labels, cmap='Spectral', s=20, alpha=0.7)
             plt.colorbar(scatter)
         else:
-            ax.scatter(reduced_embeddings[:, 0], reduced_embeddings[:, 1], s=5)
+            ax.scatter(reduced_embeddings[:, 0], reduced_embeddings[:, 1], s=20)
         ax.set_title('UMAP Reduced Embeddings')
         
         if save_path:

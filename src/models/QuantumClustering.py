@@ -13,11 +13,13 @@ class QuantumClustering:
         cosine_matrix = (embeddings @ embeddings.T) / (norms @ norms.T)
         np.fill_diagonal(cosine_matrix, 0)
 
-        for idx in medoid_indices:
+        mapped_indices = np.arange(len(medoid_indices))
+
+        for idx in mapped_indices:
             cosine_matrix[idx, idx] += 2  
 
         np.save(qubo_matrix_path, cosine_matrix)
-        print(f"QUBO matrix saved at: {qubo_matrix_path}")
+        # print(f"QUBO matrix saved at: {qubo_matrix_path}")
 
     def solve_qubo(self, qubo_matrix_path):
         """Loads and solves the QUBO problem using QuboSolver."""

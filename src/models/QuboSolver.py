@@ -2,6 +2,7 @@ import os
 import numpy as np
 import dimod
 from neal import SimulatedAnnealingSampler
+from dwave.system import DWaveSampler, EmbeddingComposite
 
 class QuboSolver:
     def __init__(self, qubo_matrix, n_clusters, num_reads=100):
@@ -12,8 +13,11 @@ class QuboSolver:
     def run_QuboSolver(self):
         """Runs Simulated Annealing on the QUBO matrix and returns optimized cluster assignments."""
         sampler = SimulatedAnnealingSampler()
+        # sampler = EmbeddingComposite(DWaveSampler())
+
         bqm = dimod.BinaryQuadraticModel.from_qubo(self.qubo_matrix)
         response = sampler.sample(bqm, num_reads=self.num_reads)
+        # response = sampler.sample(bqm, num_reads=self.num_reads)
         
         best_sample = response.first.sample
         assignments = self._decode_clusters(best_sample)
