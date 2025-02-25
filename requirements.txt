@@ -1,0 +1,10 @@
+umap-learn
+ir_datasets
+torch
+transformers
+sentence-transformers
+numpy==1.24.4
+pandas
+tqdm
+scikit-learn-extra # version 1.6.1
+numba # version 0.61.0
