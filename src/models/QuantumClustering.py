@@ -1,45 +1,40 @@
 import os
 import numpy as np
-import dimod
 from src.models.QuboSolver import QuboSolver
+from sklearn_extra.cluster import KMedoids
+from sklearn.metrics import davies_bouldin_score
 
 class QuantumClustering:
-    def __init__(self, n_clusters):
-        self.n_clusters = n_clusters
-    
-    def build_qubo_matrix(self, embeddings, medoid_indices, qubo_matrix_path):
-        """Constructs and saves the QUBO matrix for k-medoids clustering using cosine similarity."""
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        cosine_matrix = (embeddings @ embeddings.T) / (norms @ norms.T)
+    def __init__(self, k_range=None):
+        self.k_range = k_range if k_range else [2, 3, 4, 5, 6, 7, 8, 9]  
+
+    def build_qubo_matrix(self, medoid_embeddings):
+        norms = np.linalg.norm(medoid_embeddings, axis=1, keepdims=True)
+        cosine_matrix = (medoid_embeddings @ medoid_embeddings.T) / (norms @ norms.T)
         np.fill_diagonal(cosine_matrix, 0)
-
-        mapped_indices = np.arange(len(medoid_indices))
-
-        for idx in mapped_indices:
+        for idx in range(len(medoid_embeddings)):
             cosine_matrix[idx, idx] += 2  
+        return cosine_matrix
 
-        np.save(qubo_matrix_path, cosine_matrix)
-        # print(f"QUBO matrix saved at: {qubo_matrix_path}")
+    def solve_qubo(self, qubo_matrix, full_embeddings):
+        best_dbi = float("inf")
+        best_k = None
+        best_refined_medoid_indices = None
 
-    def solve_qubo(self, qubo_matrix_path):
-        """Loads and solves the QUBO problem using QuboSolver."""
-        qubo_matrix = np.load(qubo_matrix_path)
-        solver = QuboSolver(qubo_matrix, self.n_clusters)
-        return solver.run_QuboSolver()
+        for k in self.k_range:
+            solver = QuboSolver(qubo_matrix, k)
+            refined_medoid_indices = solver.run_QuboSolver()
+            refined_medoid_embeddings = full_embeddings[refined_medoid_indices]
 
-    # def solve_qubo(self, qubo_matrix_path):
-    #     """Loads and solves the QUBO problem using QuboSolver and ensures proper index mapping."""
-    #     qubo_matrix = np.load(qubo_matrix_path)
-    #     solver = QuboSolver(qubo_matrix, self.n_clusters)
-    #     raw_assignments = solver.run_QuboSolver()
-        
-    #     assignments = np.full(self.n_clusters, -1, dtype=int)
-    #     for i, medoid_idx in enumerate(raw_assignments):
-    #         assignments[i] = medoid_idx
+            final_kmedoids = KMedoids(n_clusters=k, metric='euclidean', random_state=42, init=refined_medoid_embeddings)
+            final_kmedoids.fit(full_embeddings)
 
-    #     return assignments
+            final_cluster_labels = final_kmedoids.labels_
+            dbi = davies_bouldin_score(full_embeddings, final_cluster_labels)
 
-    def save_results(self, cluster_assignments, save_path):
-        """Saves optimized cluster assignments."""
-        np.save(save_path, cluster_assignments)
-        print(f"Final quantum cluster assignments saved at: {save_path}")
+            if dbi < best_dbi:
+                best_dbi = dbi
+                best_k = k
+                best_refined_medoid_indices = refined_medoid_indices
+
+        return np.array(best_refined_medoid_indices)
