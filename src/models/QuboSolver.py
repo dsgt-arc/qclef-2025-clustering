@@ -26,9 +26,12 @@ class QuboSolver:
     def _decode_clusters(self, sample):
         """Decodes QUBO solution into optimized cluster assignments, ensuring stability."""
         cluster_labels = np.full(len(sample), -1, dtype=int)
+        # cluster_labels = np.full(self.n_clusters, -1, dtype=int)
         cluster_indices = sorted(sample.keys(), key=lambda x: sample[x], reverse=True)[:self.n_clusters]
         
         for idx, var in enumerate(cluster_indices):
             cluster_labels[var] = idx
+            # cluster_labels[idx] = var
+            # cluster_labels[idx] = idx
         
         return cluster_labels

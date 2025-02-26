@@ -27,6 +27,18 @@ class QuantumClustering:
         solver = QuboSolver(qubo_matrix, self.n_clusters)
         return solver.run_QuboSolver()
 
+    # def solve_qubo(self, qubo_matrix_path):
+    #     """Loads and solves the QUBO problem using QuboSolver and ensures proper index mapping."""
+    #     qubo_matrix = np.load(qubo_matrix_path)
+    #     solver = QuboSolver(qubo_matrix, self.n_clusters)
+    #     raw_assignments = solver.run_QuboSolver()
+        
+    #     assignments = np.full(self.n_clusters, -1, dtype=int)
+    #     for i, medoid_idx in enumerate(raw_assignments):
+    #         assignments[i] = medoid_idx
+
+    #     return assignments
+
     def save_results(self, cluster_assignments, save_path):
         """Saves optimized cluster assignments."""
         np.save(save_path, cluster_assignments)
