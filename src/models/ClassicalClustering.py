@@ -1,7 +1,7 @@
 import os
 import numpy as np
-from sklearn_extra.cluster import KMedoids
 import matplotlib.pyplot as plt
+from sklearn_extra.cluster import KMedoids
 from sklearn.metrics import davies_bouldin_score
 
 class ClassicalClustering:
@@ -13,7 +13,6 @@ class ClassicalClustering:
         self.model = None
 
     def find_optimal_k(self, embeddings):
-        """Finds the best `k` using Davies-Bouldin Index."""
         best_score = float("inf")
         best_k = None
         best_labels = None
@@ -35,18 +34,17 @@ class ClassicalClustering:
         return best_labels, best_medoid_indices
 
     def extract_medoids(self, embeddings, medoid_indices):
-        """Extracts medoid embeddings for quantum clustering."""
         return embeddings[medoid_indices]
 
-    def plot_clusters(self, embeddings, labels, save_path=None):
-        """Visualizes clustered embeddings in a scatter plot and saves if `save_path` is provided."""
+    def plot_clusters(self, embeddings, labels, medoid_embeddings, save_path=None):
         fig, ax = plt.subplots(figsize=(8, 6))
-        scatter = ax.scatter(embeddings[:, 0], embeddings[:, 1], c=labels, cmap='Spectral', s=10)
-        plt.colorbar(scatter, ax=ax)
+        ax.scatter(embeddings[:, 0], embeddings[:, 1], c=labels, cmap="Spectral", s=10, alpha=0.7)
+        ax.scatter(medoid_embeddings[:, 0], medoid_embeddings[:, 1], c="black", marker="X", s=100)
         ax.set_title(f"K-Medoids Clustering (k={self.best_k})")
 
         if save_path:
             fig.savefig(save_path, dpi=300)
+            print(f"Saved clustering plot at: {save_path}")
 
         plt.show()
         return fig
