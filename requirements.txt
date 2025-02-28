@@ -11,3 +11,6 @@ numba # version 0.61.0
 dimod
 dwave-neal
 pre-commit
+matplotlib
+jupyter
+dwave-system
