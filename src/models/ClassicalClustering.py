@@ -5,10 +5,11 @@ from sklearn_extra.cluster import KMedoids
 from sklearn.metrics import davies_bouldin_score
 
 class ClassicalClustering:
-    def __init__(self, k_range=[10, 25, 50, 75, 100], metric='euclidean', random_state=42):
+    def __init__(self, k_range=[10, 25, 50, 75, 100], metric='euclidean', random_state=42, config=None):
         self.k_range = k_range
         self.metric = metric
         self.random_state = random_state
+    
         self.best_k = None
         self.model = None
 
