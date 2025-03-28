@@ -8,3 +8,4 @@ quantum_clustering:
 
 quantum_kmedoids:
   gamma: 2
+  random_state: 42

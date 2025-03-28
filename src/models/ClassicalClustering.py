@@ -37,7 +37,7 @@ class ClassicalClustering:
     def extract_medoids(self, embeddings, medoid_indices):
         return embeddings[medoid_indices]
 
-    def plot_clusters(self, embeddings, labels, medoid_embeddings, save_path=None):
+    def plot_clusters(self, embeddings, labels, medoid_embeddings, save_path=None, showplot=False):
         fig, ax = plt.subplots(figsize=(8, 6))
         ax.scatter(embeddings[:, 0], embeddings[:, 1], c=labels, cmap="Spectral", s=10, alpha=0.7)
         ax.scatter(medoid_embeddings[:, 0], medoid_embeddings[:, 1], c="black", marker="X", s=100)
@@ -46,6 +46,9 @@ class ClassicalClustering:
         if save_path:
             fig.savefig(save_path, dpi=300)
             print(f"Saved clustering plot at: {save_path}")
-
-        plt.show()
+        if showplot:
+            plt.show()
+        else:
+            plt.close()
+        
         return fig
