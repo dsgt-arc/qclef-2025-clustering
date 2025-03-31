@@ -27,7 +27,7 @@ def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
         if refined_medoid_indices is not None and dbi < best_dbi:
             best_dbi = dbi
             best_k = k
-            best_indices = refined_medoid_indices
+            best_indices = refined_medoid_indices # AP: these refined_medoid_indices refer to the position in the medoid_embeddings, not(!) the whole dataset
 
     print(f"Final chosen k after QUBO clustering: {best_k}")
 
@@ -54,7 +54,7 @@ def run_pipeline(config):
 
     # AP: This part should be optional, like a pre-clustering step, so that we can compare to full clustering
     # Step 1: UMAP Reduction (optional)
-    umap_reducer = UMAPReducer()
+    umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
     np.save(os.path.join(data_dir, "doc_embeddings_reduced.npy"), doc_embeddings_reduced)
     umap_reducer.plot_embeddings(doc_embeddings_reduced, save_path=umap_plot_path)
@@ -82,16 +82,19 @@ def run_pipeline(config):
     best_k, refined_medoid_indices = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)
 
     if refined_medoid_indices is not None:
-        print(f"Quantum-Refined Medoid Indices: {refined_medoid_indices}")
-        # refined_medoid_embeddings = medoid_embeddings[refined_medoid_indices]
-        refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices]
+        print(f"Quantum-Refined Medoid Indices: {refined_medoid_indices}") 
+        # AP: It was correct to use medoid_embeddings[refined_medoid_indices], because the refined_medoid_indices refer to to the reduced set of data, which goes into the quantum part. 
+        # The correct indexing is with respect to that data and not to the full dataset.
+        refined_medoid_indices_of_embeddings = medoid_indices[refined_medoid_indices]
+        refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices_of_embeddings] 
         
+        #refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices]
         # Assign points to refined medoids
         print(f"Before QUBO: Assignments to Classical Medoids: {compute_clusters(doc_embeddings_reduced, medoid_indices)}")
         print(f"Refined Medoid Indices Type: {type(refined_medoid_indices)}, Shape: {refined_medoid_indices.shape}")
         print(f"Refined Medoid Embeddings Shape: {refined_medoid_embeddings.shape}")
-        print(f"Before Assigning Clusters, Medoid Indices: {refined_medoid_indices}")
-        final_cluster_labels = compute_clusters(doc_embeddings_reduced, refined_medoid_indices)
+        print(f"Before Assigning Clusters, Medoid Indices: {refined_medoid_indices_of_embeddings}")
+        final_cluster_labels = compute_clusters(doc_embeddings_reduced, refined_medoid_indices_of_embeddings)
         # final_cluster_labels = compute_clusters(doc_embeddings_reduced, refined_medoid_embeddings)
         print(f"After QUBO: Assignments to Quantum Medoids: {final_cluster_labels}")
 

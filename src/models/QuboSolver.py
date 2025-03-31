@@ -28,7 +28,7 @@ class QuboSolver:
 
         sampler = SimulatedAnnealingSampler()
         bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
-        response = sampler.sample(bqm, num_reads=self.num_reads)
+        response = sampler.sample(bqm, num_reads=self.num_reads, seed=self.config.quantum_kmedoids.random_state)
         
         print("Raw QUBO Response:", response.first.sample)  # Debugging output
 
@@ -62,10 +62,10 @@ class QuboSolver:
         return dictQ
     
     def _compute_corrloss(self, data):
-        """Compute normalized correntropy loss for QUBO matrix."""
+        """Compute Welsch M-estimator for measure of similiarity. See Baukhage 2019. eq (8) for more details """
         D = distance.squareform(distance.pdist(data, metric='euclidean'))
         
-        W = 1 - np.exp(-D / (np.max(D) + 1e-5))
+        W = 1 - np.exp(-D / 2)
         return W
 
     def _decode_clusters(self, sample):
