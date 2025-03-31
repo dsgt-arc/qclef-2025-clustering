@@ -14,3 +14,4 @@ pre-commit
 matplotlib
 jupyter
 dwave-system
+python-box
