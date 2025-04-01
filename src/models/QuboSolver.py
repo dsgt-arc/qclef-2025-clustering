@@ -1,6 +1,10 @@
 from sklearn.metrics import davies_bouldin_score, silhouette_score, pairwise_distances
 from scipy.spatial import distance
-from neal import SimulatedAnnealingSampler
+# from neal import SimulatedAnnealingSampler
+from dwave.samplers import SimulatedAnnealingSampler
+from dwave.system import DWaveSampler, EmbeddingComposite
+from dwave.system import LeapHybridSampler
+from qclef import qa_access as qa
 import numpy as np
 import dimod as dmd
 
@@ -19,19 +23,39 @@ class QuboSolver:
         # AP: build the qubo matrix. There are many ways to handle this, 
         # I suggest that you abstract the whole QUBO matrix building elsewhere, and keep this class just for the solver and utilities around it.
         # Take a look at the Instance Selection class for an example. Alternatively, you keep adding different methods here.
+
         if bqm_method == 'kmedoids':
             qubo_dict = self.BQM_kmedoids(data)
+
         # elif bqm_method = 'anothermethod1':
         #     pass    
         # elif bqm_method = 'anothermethod2':
         #     pass    
 
-        sampler = SimulatedAnnealingSampler()
-        bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
-        response = sampler.sample(bqm, num_reads=self.num_reads, seed=self.config.quantum_kmedoids.random_state)
-        
-        print("Raw QUBO Response:", response.first.sample)  # Debugging output
+        # sampler = SimulatedAnnealingSampler()
+        # sampler = EmbeddingComposite(DWaveSampler(solver={"topology__type": "pegasus"}))
+        # sampler = LeapHybridSampler()
 
+        bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
+
+        solver_config = self.config.quantum_kmedoids
+
+        solver_flags = [solver_config.use_quantum, solver_config.use_hybrid]
+        if sum(solver_flags) > 1:
+            raise ValueError("Only one of `use_quantum` or `use_hybrid` should be True.")
+
+        if solver_config.use_quantum:
+            sampler = EmbeddingComposite(DWaveSampler())
+            response = qa.submit(sampler, EmbeddingComposite.sample, bqm, num_reads=self.num_reads, label="3 - Quantum Clustering")
+        elif solver_config.use_hybrid:
+            sampler = LeapHybridSampler()
+            response = qa.submit(sampler, LeapHybridSampler.sample, bqm, label="3 - Hybrid Clustering")
+        else:
+            sampler = SimulatedAnnealingSampler()
+            response = qa.submit(sampler, SimulatedAnnealingSampler.sample, bqm, num_reads=self.num_reads, label="3 - Simulated Clustering")
+
+        # response = sampler
+        print("Raw QUBO Response:", response.first.sample)  # Debugging output
         best_sample = response.first.sample
         return self._decode_clusters(best_sample)
 
