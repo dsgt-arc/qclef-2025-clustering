@@ -35,11 +35,10 @@ class QuboSolver:
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
-                # Instead of recursively retrying, force a valid solution
-                best_sample = response.first.sample
-                selected_indices = self._decode_clusters(best_sample)
-                return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
+                # Retry with higher gamma
+                self.config.quantum_kmedoids.gamma *= 2
+                return self.run_QuboSolver(data, bqm_method)
         elif solver_config.use_hybrid:
             sampler = LeapHybridSampler()
             response = qa.submit(sampler, LeapHybridSampler.sample, bqm, label="3 - Hybrid Clustering")
@@ -47,10 +46,9 @@ class QuboSolver:
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
-                best_sample = response.first.sample
-                selected_indices = self._decode_clusters(best_sample)
-                return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
+                self.config.quantum_kmedoids.gamma *= 2
+                return self.run_QuboSolver(data, bqm_method)
         else:
             sampler = SimulatedAnnealingSampler()
             response = qa.submit(sampler, SimulatedAnnealingSampler.sample, bqm, num_reads=self.num_reads, label="3 - Simulated Clustering")
@@ -144,78 +142,6 @@ class QuboSolver:
             print(f"Warning: QUBO selected {selected_count} medoids instead of the required {self.n_clusters}")
             
         return np.array(cluster_indices, dtype=int)
-    
-    def _force_valid_k_solution(self, selected_indices, data, k):
-        """Force a solution with exactly k medoids by adding or removing indices."""
-        current_count = len(selected_indices)
-        
-        # If we have too few medoids, add more based on distance
-        if current_count < k:
-            print(f"Adding {k - current_count} more medoids to meet the requirement")
-            
-            # Get all indices not currently selected
-            all_indices = np.arange(len(data))
-            available_indices = np.setdiff1d(all_indices, selected_indices)
-            
-            # If we have no medoids at all, just pick k random ones
-            if current_count == 0:
-                np.random.shuffle(available_indices)
-                return available_indices[:k]
-            
-            # Compute distances from each available point to all selected medoids
-            selected_data = data[selected_indices]
-            
-            # For each available index, find its distance to the closest selected medoid
-            min_distances = []
-            for idx in available_indices:
-                point = data[idx].reshape(1, -1)
-                dists = pairwise_distances(point, selected_data)
-                min_distances.append(np.min(dists))
-            
-            # Sort available indices by distance (furthest first)
-            sorted_indices = available_indices[np.argsort(-np.array(min_distances))]
-            
-            # Add the k - current_count furthest points
-            additional_indices = sorted_indices[:(k - current_count)]
-            return np.concatenate([selected_indices, additional_indices])
-            
-        # If we have too many medoids, remove some based on redundancy
-        elif current_count > k:
-            print(f"Removing {current_count - k} medoids to meet the requirement")
-            
-            # Calculate pairwise distances between all selected medoids
-            selected_data = data[selected_indices]
-            distances = pairwise_distances(selected_data)
-            
-            # Set diagonal to infinity to avoid picking same point
-            np.fill_diagonal(distances, np.inf)
-            
-            # Iteratively remove the most redundant medoid
-            indices_to_keep = list(range(current_count))
-            
-            for _ in range(current_count - k):
-                # Find the pair of medoids with the smallest distance
-                min_i, min_j = np.unravel_index(np.argmin(distances), distances.shape)
-                
-                # Decide which one to remove (the one with the smaller average distance to others)
-                avg_dist_i = np.mean(distances[min_i, :])
-                avg_dist_j = np.mean(distances[min_j, :])
-                
-                # Remove the most redundant one
-                to_remove = min_i if avg_dist_i < avg_dist_j else min_j
-                
-                # Set all distances for this point to infinity
-                distances[to_remove, :] = np.inf
-                distances[:, to_remove] = np.inf
-                
-                # Remove from our list of indices to keep
-                indices_to_keep.remove(to_remove)
-            
-            return selected_indices[indices_to_keep]
-            
-        # Already have exactly k medoids
-        else:
-            return selected_indices
     
     @staticmethod
     def to_upper_triangular(M):
