@@ -35,25 +35,60 @@ class QuboSolver:
             response = qa.submit(sampler, EmbeddingComposite.sample, bqm, num_reads=self.num_reads, label="3 - Quantum Clustering")
             # Validate k-constraint in response
             valid_sample = self._find_valid_k_sample(response, self.n_clusters)
+            
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
-                # Instead of recursively retrying, force a valid solution
-                best_sample = response.first.sample
-                selected_indices = self._decode_clusters(best_sample)
-                return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
+                # Try again with higher gamma
+                self.config.quantum_kmedoids.gamma *= 2
+                # Set a maximum number of retries to avoid infinite loops
+                if self.config.quantum_kmedoids.gamma < 1000:  # Set a reasonable limit
+                    return self.run_QuboSolver(data, bqm_method)
+                else:
+                    print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
+                    best_sample = response.first.sample
+                    selected_indices = self._decode_clusters(best_sample)
+                    return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+            
+            # if valid_sample is not None:
+            #     return self._decode_clusters(valid_sample)
+            # else:
+            #     print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
+            #     # Instead of recursively retrying, force a valid solution
+            #     best_sample = response.first.sample
+            #     selected_indices = self._decode_clusters(best_sample)
+            #     return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+
+
         elif solver_config.use_hybrid:
             sampler = LeapHybridSampler()
             response = qa.submit(sampler, LeapHybridSampler.sample, bqm, label="3 - Hybrid Clustering")
             valid_sample = self._find_valid_k_sample(response, self.n_clusters)
+
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
-                best_sample = response.first.sample
-                selected_indices = self._decode_clusters(best_sample)
-                return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
+                # Try again with higher gamma
+                self.config.quantum_kmedoids.gamma *= 2
+                # Set a maximum number of retries to avoid infinite loops
+                if self.config.quantum_kmedoids.gamma < 1000:  # Set a reasonable limit
+                    return self.run_QuboSolver(data, bqm_method)
+                else:
+                    print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
+                    best_sample = response.first.sample
+                    selected_indices = self._decode_clusters(best_sample)
+                    return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+
+            # if valid_sample is not None:
+            #     return self._decode_clusters(valid_sample)
+            # else:
+            #     print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
+            #     best_sample = response.first.sample
+            #     selected_indices = self._decode_clusters(best_sample)
+            #     return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+
         else:
             sampler = SimulatedAnnealingSampler()
             response = qa.submit(sampler, SimulatedAnnealingSampler.sample, bqm, num_reads=self.num_reads, label="3 - Simulated Clustering")
