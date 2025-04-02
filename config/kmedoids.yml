@@ -9,5 +9,6 @@ quantum_clustering:
 quantum_kmedoids:
   use_quantum: true
   use_hybrid: false
-  gamma: 10
+  gamma: 1
+  gamma_constraint: 10
   random_state: 42

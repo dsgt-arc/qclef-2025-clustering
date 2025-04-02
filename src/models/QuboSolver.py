@@ -19,7 +19,8 @@ class QuboSolver:
         #     qubo_dict = self.BQM_kmedoids(data)
 
         if bqm_method == 'kmedoids':
-            qubo_dict = self.BQM_kmedoids_with_combinations(data)
+            # qubo_dict = self.BQM_kmedoids_with_combinations(data)
+            qubo_dict = self.BQM_kmedoids_with_dimod_constraint(data)
 
         bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
 
@@ -113,56 +114,31 @@ class QuboSolver:
                 return sample
         return None
 
-    # def BQM_kmedoids(self, data):
-    #     """Build QUBO matrix with penalty terms (α, β, γ)."""
-    #     N = len(data)
-    #     alpha = 1 / self.n_clusters
-    #     beta = 1 / N
-        
-    #     # Get gamma from config
-    #     gamma = self.config.quantum_kmedoids.gamma
-        
-    #     # If using quantum or hybrid, increase gamma for stronger constraint enforcement
-    #     solver_config = self.config.quantum_kmedoids
-    #     if solver_config.use_quantum or solver_config.use_hybrid:
-    #         # Increase constraint strength for quantum methods
-    #         gamma *= 2
-    #         print(f"Increased gamma to {gamma} for quantum/hybrid solver")
-        
-    #     W = self._compute_corrloss(data)
+    def BQM_kmedoids(self, data): #AP: This is just really for the kmedoids approach, should be named properly
+        """Build QUBO matrix with penalty terms (α, β, γ)."""
+        N = len(data)
+        alpha = 1 / self.n_clusters
+        beta = 1 / N
+        gamma = self.config.quantum_kmedoids.gamma
 
-    #     # Initialize Q matrix with similarity costs
-    #     Q = {}
-        
-    #     # Add the linear terms (diagonal elements)
-    #     for i in range(N):
-    #         # Penalty for deviating from k medoids
-    #         Q[(i, i)] = -2 * gamma * self.n_clusters + beta * np.sum(W[i])
-        
-    #     # Add quadratic terms (non-diagonal elements)
-    #     for i in range(N):
-    #         for j in range(i+1, N):
-    #             Q[(i, j)] = gamma - alpha * W[i, j] / 2
-        
-    #     # Add extra constraint to ensure exactly k medoids
-    #     # This creates a penalty term of the form gamma * (sum_i x_i - k)^2
-    #     lagrange_term = gamma * N  # Scale with problem size
-        
-    #     # Add additional terms to enforce the k-constraint more strictly
-    #     for i in range(N):
-    #         for j in range(i, N):
-    #             if i == j:
-    #                 Q[(i, i)] += lagrange_term
-    #             else:
-    #                 if (i, j) in Q:
-    #                     Q[(i, j)] += 2 * lagrange_term
-    #                 else:
-    #                     Q[(i, j)] = 2 * lagrange_term
+        W = self._compute_corrloss(data) # equal to delta in their case
 
-    #     # Print debugging info
-    #     print(f"Penalty terms - α: {alpha}, β: {beta}, γ: {gamma}, Lagrange: {lagrange_term}")
-        
-    #     return Q
+        Q = gamma - alpha * W / 2
+
+        for i in range(N):
+            Q[i, i] += beta * np.sum(W[i]) - 2 * gamma * self.n_clusters
+
+        Q = self.to_upper_triangular(Q)
+        dictQ = self.matrix_to_dict(Q)
+
+        # Print debugging info
+        print(f"Penalty terms - α: {alpha}, β: {beta}, γ: {gamma}")
+        print(f"QUBO Matrix Min: {np.min(Q)}, Max: {np.max(Q)}, Mean: {np.mean(Q)}")
+        print(f"QUBO Matrix Sample:\n{Q[:5, :5]}")
+
+        # AP: plotting it could be a nice debugging tool too
+
+        return dictQ
 
     def BQM_kmedoids_with_combinations(self, data):
         """Build QUBO matrix using dimod.generators.combinations for k-constraint."""
@@ -199,7 +175,67 @@ class QuboSolver:
         
         # Convert back to QUBO dictionary format
         return combined_bqm.to_qubo()[0]  # to_qubo() returns (Q, offset)
+
+    def BQM_kmedoids_original_with_dimod_constraint(self, data):
+        """Original QUBO clustering formulation + exact-k constraint via dimod."""
+        N = len(data)
+        alpha = 1 / self.n_clusters
+        beta = 1 / N
+
+        gamma = self.config.quantum_kmedoids.gamma
+
+        gamma_constraint = self.config.quantum_kmedoids.gamma_constraint  # new separate penalty for dimod
+
+        W = self._compute_corrloss(data)
+
+        # Build original QUBO matrix
+        Q = gamma - alpha * W / 2
+        for i in range(N):
+            Q[i, i] += beta * np.sum(W[i]) - 2 * gamma * self.n_clusters
+
+        Q = self.to_upper_triangular(Q)
+        dictQ = self.matrix_to_dict(Q)
+
+        # Create BQM from original clustering QUBO
+        bqm = dmd.BinaryQuadraticModel.from_qubo(dictQ)
+
+        # Add exact-k constraint using dimod
+        constraint_bqm = dmd.generators.combinations(N, self.n_clusters)
+        combined_bqm = bqm + gamma_constraint * constraint_bqm
+
+        print(f"Penalty terms - α: {alpha}, β: {beta}, γ_cluster: {gamma}, γ_constraint: {gamma_constraint}")
+
+        return combined_bqm.to_qubo()[0]
     
+    def BQM_kmedoids_with_dimod_constraint(self, data):
+        """QUBO with original clustering terms and cleanly separated dimod constraint."""
+        N = len(data)
+        alpha = 1 / self.n_clusters
+        beta = 1 / N
+
+        gamma = self.config.quantum_kmedoids.gamma
+
+        gamma_constraint = self.config.quantum_kmedoids.gamma_constraint  # NEW: separate gamma for k-constraint
+
+        W = self._compute_corrloss(data)
+        Q = {}
+
+        # Add clustering terms (intra + inter cluster)
+        for i in range(N):
+            Q[(i, i)] = beta * np.sum(W[i])  # linear
+            for j in range(i+1, N):
+                Q[(i, j)] = gamma - alpha * W[i, j] / 2  # quadratic
+
+        bqm = dmd.BinaryQuadraticModel.from_qubo(Q)
+
+        # Add k-constraint via dimod
+        bqm_constraint = dmd.generators.combinations(N, self.n_clusters)
+        combined_bqm = bqm + gamma_constraint * bqm_constraint
+
+        print(f"Penalty terms – α: {alpha}, β: {beta}, γ_cluster: {gamma}, γ_constraint: {gamma_constraint}")
+
+        return combined_bqm.to_qubo()[0]
+
     def _compute_corrloss(self, data):
         """Compute Welsch M-estimator for measure of similiarity."""
         D = distance.squareform(distance.pdist(data, metric='euclidean'))
