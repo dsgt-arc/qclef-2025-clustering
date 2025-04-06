@@ -15,11 +15,8 @@ class QuboSolver:
         self.config = config
 
     def run_QuboSolver(self, data, bqm_method='kmedoids'):
-        # if bqm_method == 'kmedoids':
-        #     qubo_dict = self.BQM_kmedoids(data)
 
         if bqm_method == 'kmedoids':
-            # qubo_dict = self.BQM_kmedoids_with_combinations(data)
             qubo_dict = self.BQM_kmedoids_with_dimod_constraint(data)
 
         bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
@@ -32,35 +29,21 @@ class QuboSolver:
 
         if solver_config.use_quantum:
             sampler = EmbeddingComposite(DWaveSampler())
-            # Add constraint validation by filtering samples
             response = qa.submit(sampler, EmbeddingComposite.sample, bqm, num_reads=self.num_reads, label="3 - Quantum Clustering")
-            # Validate k-constraint in response
             valid_sample = self._find_valid_k_sample(response, self.n_clusters)
             
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
                 print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                # Try again with higher gamma
                 self.config.quantum_kmedoids.gamma *= 2
-                # Set a maximum number of retries to avoid infinite loops
-                if self.config.quantum_kmedoids.gamma < 1000:  # Set a reasonable limit
+                if self.config.quantum_kmedoids.gamma < 1000:
                     return self.run_QuboSolver(data, bqm_method)
                 else:
                     print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
                     best_sample = response.first.sample
                     selected_indices = self._decode_clusters(best_sample)
                     return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
-            
-            # if valid_sample is not None:
-            #     return self._decode_clusters(valid_sample)
-            # else:
-            #     print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
-            #     # Instead of recursively retrying, force a valid solution
-            #     best_sample = response.first.sample
-            #     selected_indices = self._decode_clusters(best_sample)
-            #     return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
-
 
         elif solver_config.use_hybrid:
             sampler = LeapHybridSampler()
@@ -71,10 +54,8 @@ class QuboSolver:
                 return self._decode_clusters(valid_sample)
             else:
                 print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                # Try again with higher gamma
                 self.config.quantum_kmedoids.gamma *= 2
-                # Set a maximum number of retries to avoid infinite loops
-                if self.config.quantum_kmedoids.gamma < 1000:  # Set a reasonable limit
+                if self.config.quantum_kmedoids.gamma < 1000:
                     return self.run_QuboSolver(data, bqm_method)
                 else:
                     print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
@@ -82,24 +63,29 @@ class QuboSolver:
                     selected_indices = self._decode_clusters(best_sample)
                     return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
 
-            # if valid_sample is not None:
-            #     return self._decode_clusters(valid_sample)
-            # else:
-            #     print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found.")
-            #     best_sample = response.first.sample
-            #     selected_indices = self._decode_clusters(best_sample)
-            #     return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
-
         else:
             sampler = SimulatedAnnealingSampler()
             response = qa.submit(sampler, SimulatedAnnealingSampler.sample, bqm, num_reads=self.num_reads, label="3 - Simulated Clustering")
+    
+            valid_sample = self._find_valid_k_sample(response, self.n_clusters)
+            
+            if valid_sample is not None:
+                return self._decode_clusters(valid_sample)
+            else:
+                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
+                self.config.quantum_kmedoids.gamma *= 2
+                if self.config.quantum_kmedoids.gamma < 1000:
+                    return self.run_QuboSolver(data, bqm_method)
+                else:
+                    print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
+                    best_sample = response.first.sample
+                    selected_indices = self._decode_clusters(best_sample)
+                    return self._force_valid_k_solution(selected_indices, data, self.n_clusters)    
 
-        # Print debug information on number of selected medoids
         best_sample = response.first.sample
         selected_medoids_count = sum(best_sample.values())
         print(f"Selected {selected_medoids_count} medoids out of requested {self.n_clusters}")
         
-        # For QA cases that didn't get caught by the above logic
         if solver_config.use_quantum or solver_config.use_hybrid:
             if selected_medoids_count != self.n_clusters:
                 print(f"WARNING: QUBO solution has {selected_medoids_count} medoids instead of {self.n_clusters}")
@@ -114,14 +100,14 @@ class QuboSolver:
                 return sample
         return None
 
-    def BQM_kmedoids(self, data): #AP: This is just really for the kmedoids approach, should be named properly
+    def BQM_kmedoids(self, data):
         """Build QUBO matrix with penalty terms (α, β, γ)."""
         N = len(data)
         alpha = 1 / self.n_clusters
         beta = 1 / N
         gamma = self.config.quantum_kmedoids.gamma
 
-        W = self._compute_corrloss(data) # equal to delta in their case
+        W = self._compute_corrloss(data)
 
         Q = gamma - alpha * W / 2
 
@@ -131,12 +117,9 @@ class QuboSolver:
         Q = self.to_upper_triangular(Q)
         dictQ = self.matrix_to_dict(Q)
 
-        # Print debugging info
         print(f"Penalty terms - α: {alpha}, β: {beta}, γ: {gamma}")
         print(f"QUBO Matrix Min: {np.min(Q)}, Max: {np.max(Q)}, Mean: {np.mean(Q)}")
         print(f"QUBO Matrix Sample:\n{Q[:5, :5]}")
-
-        # AP: plotting it could be a nice debugging tool too
 
         return dictQ
 
@@ -146,35 +129,25 @@ class QuboSolver:
         alpha = 1 / self.n_clusters
         beta = 1 / N
         
-        # Calculate dissimilarity matrix
         W = self._compute_corrloss(data)
         
-        # Initialize QUBO dictionary without the gamma constraint
         Q = {}
         
-        # Add quadratic terms (similarity between points)
         for i in range(N):
             for j in range(i+1, N):
                 Q[(i, j)] = -alpha * W[i, j] / 2
         
-        # Add linear terms (intra-cluster dissimilarity)
         for i in range(N):
             Q[(i, i)] = beta * np.sum(W[i])
         
-        # Create binary quadratic model from the core clustering objective
         bqm = dmd.BinaryQuadraticModel.from_qubo(Q)
         
-        # Add the constraint that exactly k variables must be 1
-        # This creates a penalty for any solution that doesn't have exactly k ones
         bqm_constraint = dmd.generators.combinations(N, self.n_clusters)
         
-        # Combine the core model with the constraint
-        # The Lagrange multiplier (gamma) determines how strongly to enforce the constraint
         gamma = self.config.quantum_kmedoids.gamma
         combined_bqm = bqm + gamma * bqm_constraint
         
-        # Convert back to QUBO dictionary format
-        return combined_bqm.to_qubo()[0]  # to_qubo() returns (Q, offset)
+        return combined_bqm.to_qubo()[0]
 
     def BQM_kmedoids_original_with_dimod_constraint(self, data):
         """Original QUBO clustering formulation + exact-k constraint via dimod."""
@@ -184,11 +157,10 @@ class QuboSolver:
 
         gamma = self.config.quantum_kmedoids.gamma
 
-        gamma_constraint = self.config.quantum_kmedoids.gamma_constraint  # new separate penalty for dimod
+        gamma_constraint = self.config.quantum_kmedoids.gamma_constraint
 
         W = self._compute_corrloss(data)
 
-        # Build original QUBO matrix
         Q = gamma - alpha * W / 2
         for i in range(N):
             Q[i, i] += beta * np.sum(W[i]) - 2 * gamma * self.n_clusters
@@ -196,10 +168,8 @@ class QuboSolver:
         Q = self.to_upper_triangular(Q)
         dictQ = self.matrix_to_dict(Q)
 
-        # Create BQM from original clustering QUBO
         bqm = dmd.BinaryQuadraticModel.from_qubo(dictQ)
 
-        # Add exact-k constraint using dimod
         constraint_bqm = dmd.generators.combinations(N, self.n_clusters)
         combined_bqm = bqm + gamma_constraint * constraint_bqm
 
@@ -215,20 +185,18 @@ class QuboSolver:
 
         gamma = self.config.quantum_kmedoids.gamma
 
-        gamma_constraint = self.config.quantum_kmedoids.gamma_constraint  # NEW: separate gamma for k-constraint
+        gamma_constraint = self.config.quantum_kmedoids.gamma_constraint
 
         W = self._compute_corrloss(data)
         Q = {}
 
-        # Add clustering terms (intra + inter cluster)
         for i in range(N):
-            Q[(i, i)] = beta * np.sum(W[i])  # linear
+            Q[(i, i)] = beta * np.sum(W[i])
             for j in range(i+1, N):
-                Q[(i, j)] = gamma - alpha * W[i, j] / 2  # quadratic
+                Q[(i, j)] = gamma - alpha * W[i, j] / 2
 
         bqm = dmd.BinaryQuadraticModel.from_qubo(Q)
 
-        # Add k-constraint via dimod
         bqm_constraint = dmd.generators.combinations(N, self.n_clusters)
         combined_bqm = bqm + gamma_constraint * bqm_constraint
 
@@ -259,71 +227,54 @@ class QuboSolver:
         """Force a solution with exactly k medoids by adding or removing indices."""
         current_count = len(selected_indices)
         
-        # If we have too few medoids, add more based on distance
         if current_count < k:
             print(f"Adding {k - current_count} more medoids to meet the requirement")
             
-            # Get all indices not currently selected
             all_indices = np.arange(len(data))
             available_indices = np.setdiff1d(all_indices, selected_indices)
             
-            # If we have no medoids at all, just pick k random ones
             if current_count == 0:
                 np.random.shuffle(available_indices)
                 return available_indices[:k]
             
-            # Compute distances from each available point to all selected medoids
             selected_data = data[selected_indices]
             
-            # For each available index, find its distance to the closest selected medoid
             min_distances = []
             for idx in available_indices:
                 point = data[idx].reshape(1, -1)
                 dists = pairwise_distances(point, selected_data)
                 min_distances.append(np.min(dists))
             
-            # Sort available indices by distance (furthest first)
             sorted_indices = available_indices[np.argsort(-np.array(min_distances))]
             
-            # Add the k - current_count furthest points
             additional_indices = sorted_indices[:(k - current_count)]
             return np.concatenate([selected_indices, additional_indices])
             
-        # If we have too many medoids, remove some based on redundancy
         elif current_count > k:
             print(f"Removing {current_count - k} medoids to meet the requirement")
             
-            # Calculate pairwise distances between all selected medoids
             selected_data = data[selected_indices]
             distances = pairwise_distances(selected_data)
             
-            # Set diagonal to infinity to avoid picking same point
             np.fill_diagonal(distances, np.inf)
             
-            # Iteratively remove the most redundant medoid
             indices_to_keep = list(range(current_count))
             
             for _ in range(current_count - k):
-                # Find the pair of medoids with the smallest distance
                 min_i, min_j = np.unravel_index(np.argmin(distances), distances.shape)
                 
-                # Decide which one to remove (the one with the smaller average distance to others)
                 avg_dist_i = np.mean(distances[min_i, :])
                 avg_dist_j = np.mean(distances[min_j, :])
                 
-                # Remove the most redundant one
                 to_remove = min_i if avg_dist_i < avg_dist_j else min_j
                 
-                # Set all distances for this point to infinity
                 distances[to_remove, :] = np.inf
                 distances[:, to_remove] = np.inf
                 
-                # Remove from our list of indices to keep
                 indices_to_keep.remove(to_remove)
             
             return selected_indices[indices_to_keep]
             
-        # Already have exactly k medoids
         else:
             return selected_indices
     

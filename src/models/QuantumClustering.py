@@ -27,7 +27,6 @@ class QuantumClustering:
 
         return refined_medoid_indices, dbi, silhouette
 
-# helper function
 def compute_clusters(data, medoid_indices):
     """Assign each point to the closest medoid."""
     if len(medoid_indices) == 0:
