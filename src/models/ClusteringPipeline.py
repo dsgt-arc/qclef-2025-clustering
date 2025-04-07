@@ -83,6 +83,8 @@ def run_pipeline(config, colormap_name=None):
     plot_embeddings(doc_embeddings_reduced, labels=kmedoid_labels, medoids=medoid_embeddings,
                 title=f"K-Medoids Clustering (k={clustering.best_k})", save_path=kmedoids_plot_path, cmap=cmap)
 
+    # Creating the QuantumClustering instance remains the same
+    # The internal implementation has changed, but the interface remains consistent
     quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
 
     best_k, refined_medoid_indices = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)

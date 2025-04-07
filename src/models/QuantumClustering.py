@@ -1,8 +1,8 @@
-
+from src.models.QuboBuilder import KMedoidsQuboBuilder
 from src.models.QuboSolver import QuboSolver
 from sklearn.metrics import davies_bouldin_score, silhouette_score, pairwise_distances
 import numpy as np
- 
+
 
 class QuantumClustering:
     def __init__(self, k_range, data, config):
@@ -14,18 +14,24 @@ class QuantumClustering:
         """Run QUBO clustering for a given k (no longer searching for best k inside this function)."""
         print(f"Solving QUBO for k={k}")
 
-        solver = QuboSolver(n_clusters=k, config=self.config)
-        refined_medoid_indices = solver.run_QuboSolver(self.data, bqm_method='kmedoids')
+        builder = KMedoidsQuboBuilder(n_clusters=k, config=self.config)
+        
+        qubo_dict = builder.build_qubo(self.data, method='auto_constraint')
+        
+        solver = QuboSolver(config=self.config)
+        
+        refined_medoid_indices = solver.solve(qubo_dict, k, self.data, builder)
 
         if refined_medoid_indices is None or len(refined_medoid_indices) == 0:
             print(f"Warning: No valid medoids found for k={k}.")
-            return None, None
+            return None, None, None
 
         final_cluster_labels = compute_clusters(medoid_embeddings, refined_medoid_indices)
         dbi = davies_bouldin_score(medoid_embeddings, final_cluster_labels)
         silhouette = silhouette_score(medoid_embeddings, final_cluster_labels)
 
         return refined_medoid_indices, dbi, silhouette
+
 
 def compute_clusters(data, medoid_indices):
     """Assign each point to the closest medoid."""
