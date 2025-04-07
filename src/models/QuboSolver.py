@@ -36,8 +36,8 @@ class QuboSolver:
                 return self._decode_clusters(valid_sample)
             else:
                 print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                self.config.quantum_kmedoids.gamma *= 2
-                if self.config.quantum_kmedoids.gamma < 1000:
+                self.config.quantum_kmedoids.gamma_constraint *= 2
+                if self.config.quantum_kmedoids.gamma_constraint < 1000:
                     return self.run_QuboSolver(data, bqm_method)
                 else:
                     print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
@@ -54,8 +54,8 @@ class QuboSolver:
                 return self._decode_clusters(valid_sample)
             else:
                 print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                self.config.quantum_kmedoids.gamma *= 2
-                if self.config.quantum_kmedoids.gamma < 1000:
+                self.config.quantum_kmedoids.gamma_constraint *= 2
+                if self.config.quantum_kmedoids.gamma_constraint < 1000:
                     return self.run_QuboSolver(data, bqm_method)
                 else:
                     print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
@@ -73,8 +73,8 @@ class QuboSolver:
                 return self._decode_clusters(valid_sample)
             else:
                 print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                self.config.quantum_kmedoids.gamma *= 2
-                if self.config.quantum_kmedoids.gamma < 1000:
+                self.config.quantum_kmedoids.gamma_constraint *= 2
+                if self.config.quantum_kmedoids.gamma_constraint < 1000:
                     return self.run_QuboSolver(data, bqm_method)
                 else:
                     print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
