@@ -15,9 +15,27 @@ class QuboSolver:
         self.bqm = None
         self.config = config
 
+    def _create_initial_clustering_bqm(self, data):
+        """Create the initial BQM without constraint."""
+        N = len(data)
+        alpha = 1 / self.n_clusters
+        beta = 1 / N
+        
+        W = self._compute_corrloss(data)
+        
+        Q = {}
+        for i in range(N):
+            Q[(i, i)] = beta * np.sum(W[i])
+            for j in range(i+1, N):
+                Q[(i, j)] = -alpha * W[i, j] / 2
+        
+        return dmd.BinaryQuadraticModel.from_qubo(Q)
+    
     def run_QuboSolver(self, data, bqm_method='kmedoids'):
         if bqm_method == 'kmedoids':
-            qubo_dict = self.BQM_kmedoids_with_dimod_constraint(data)
+            # qubo_dict = self.BQM_kmedoids_with_dimod_constraint(data)
+            # qubo_dict = self.BQM_kmedoids_quadratic_penalty(data)
+            qubo_dict = self.BQM_kmedoids_auto_constraint(data)
 
         bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
 
@@ -29,6 +47,34 @@ class QuboSolver:
 
         initial_gamma = solver_config.gamma
         initial_gamma_constraint = solver_config.gamma_constraint
+        
+        def try_fallback_strategy_auto(response, sampler, sample_method, **kwargs):
+            initial_bqm = self._create_initial_clustering_bqm(data)
+            base_penalty = initial_bqm.maximum_energy_delta()
+            
+            for penalty_multiplier in [2, 4, 8, 16, 32, 64, 128]:
+                penalty = base_penalty * penalty_multiplier
+                print(f"Trying with increased auto_penalty = {penalty}")
+                
+                constraint_bqm = dmd.generators.combinations(
+                    initial_bqm.variables, 
+                    self.n_clusters,
+                    strength=penalty
+                )
+                
+                new_bqm = initial_bqm.copy()
+                new_bqm.update(constraint_bqm)
+                
+                response = qa.submit(sampler, sample_method, new_bqm, **kwargs)
+                valid_sample = self._find_valid_k_sample(response, self.n_clusters)
+                if valid_sample is not None:
+                    return self._decode_clusters(valid_sample)
+            
+            print(f"Warning: All fallback strategies exhausted. Falling back to forcevalid_k_solution.")
+            best_sample = response.first.sample
+            selected_indices = self._decode_clusters(best_sample)
+            return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+        
         
         def try_fallback_strategy(response, sampler, sample_method, **kwargs):
             for constraint_multiplier in [1, 2, 4, 8, 16, 32, 64, 128]:
@@ -67,7 +113,7 @@ class QuboSolver:
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                return try_fallback_strategy(
+                return try_fallback_strategy_auto(
                     response, 
                     sampler, 
                     EmbeddingComposite.sample, 
@@ -83,7 +129,7 @@ class QuboSolver:
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                return try_fallback_strategy(
+                return try_fallback_strategy_auto(
                     response, 
                     sampler, 
                     LeapHybridSampler.sample, 
@@ -98,7 +144,7 @@ class QuboSolver:
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                return try_fallback_strategy(
+                return try_fallback_strategy_auto(
                     response, 
                     sampler, 
                     SimulatedAnnealingSampler.sample, 
@@ -135,7 +181,40 @@ class QuboSolver:
         print(f"QUBO Matrix Min: {np.min(Q)}, Max: {np.max(Q)}, Mean: {np.mean(Q)}")
         print(f"QUBO Matrix Sample:\n{Q[:5, :5]}")
 
+        return dictQ
 
+    def BQM_kmedoids_quadratic_penalty(self, data):
+        """Build QUBO matrix with a single gamma penalty term for both clustering and k-constraint."""
+        N = len(data)
+        alpha = 1 / self.n_clusters
+        beta = 1 / N
+        gamma = self.config.quantum_kmedoids.gamma
+
+        W = self._compute_corrloss(data)
+        
+        Q = np.zeros((N, N))
+        
+        for i in range(N):
+            for j in range(N):
+                if i != j:
+                    Q[i, j] -= alpha * W[i, j] / 2
+        
+        for i in range(N):
+            Q[i, i] += beta * np.sum(W[i])
+            
+            Q[i, i] += gamma
+            
+            Q[i, i] -= 2 * gamma * self.n_clusters
+            
+            for j in range(i+1, N):
+                Q[i, j] += 2 * gamma
+        
+        # Convert to upper triangular form
+        Q = self.to_upper_triangular(Q)
+        dictQ = self.matrix_to_dict(Q)
+        
+        print(f"Penalty terms - α: {alpha}, β: {beta}, γ: {gamma}")
+        
         return dictQ
 
     def BQM_kmedoids_with_combinations(self, data):
@@ -219,6 +298,36 @@ class QuboSolver:
 
         return combined_bqm.to_qubo()[0]
 
+    def BQM_kmedoids_auto_constraint(self, data):
+        """QUBO with automatic constraint penalty calculation."""
+        N = len(data)
+        alpha = 1 / self.n_clusters
+        beta = 1 / N
+
+        W = self._compute_corrloss(data)
+        
+        Q = {}
+        for i in range(N):
+            Q[(i, i)] = beta * np.sum(W[i])
+            for j in range(i+1, N):
+                Q[(i, j)] = -alpha * W[i, j] / 2
+        
+        initial_bqm = dmd.BinaryQuadraticModel.from_qubo(Q)
+        
+        penalty = initial_bqm.maximum_energy_delta()
+        
+        constraint_bqm = dmd.generators.combinations(
+            initial_bqm.variables, 
+            self.n_clusters,
+            strength=penalty
+        )
+        
+        initial_bqm.update(constraint_bqm)
+        
+        print(f"Penalty terms - α: {alpha}, β: {beta}, auto_penalty: {penalty}")
+        
+        return initial_bqm.to_qubo()[0]
+    
     def _compute_corrloss(self, data):
         """Compute Welsch M-estimator for measure of similiarity."""
         D = distance.squareform(distance.pdist(data, metric='euclidean'))
