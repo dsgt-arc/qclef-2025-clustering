@@ -1,6 +1,7 @@
 from sklearn.metrics import davies_bouldin_score, silhouette_score, pairwise_distances
 from scipy.spatial import distance
 from dwave.samplers import SimulatedAnnealingSampler
+from dwave.embedding import embed_bqm
 from dwave.system import DWaveSampler, EmbeddingComposite
 from dwave.system import LeapHybridSampler
 from qclef import qa_access as qa
@@ -15,7 +16,6 @@ class QuboSolver:
         self.config = config
 
     def run_QuboSolver(self, data, bqm_method='kmedoids'):
-
         if bqm_method == 'kmedoids':
             qubo_dict = self.BQM_kmedoids_with_dimod_constraint(data)
 
@@ -25,7 +25,39 @@ class QuboSolver:
 
         solver_flags = [solver_config.use_quantum, solver_config.use_hybrid]
         if sum(solver_flags) > 1:
-            raise ValueError("Only one of `use_quantum` or `use_hybrid` should be True.")
+            raise ValueError("Only one of use_quantum or use_hybrid should be True.")
+
+        initial_gamma = solver_config.gamma
+        initial_gamma_constraint = solver_config.gamma_constraint
+        
+        def try_fallback_strategy(response, sampler, sample_method, **kwargs):
+            for constraint_multiplier in [1, 2, 4, 8, 16, 32, 64, 128]:
+                if constraint_multiplier > 1:
+                    solver_config.gamma_constraint = initial_gamma_constraint * constraint_multiplier
+                    print(f"Trying with increased γ_cluster_constraint = {solver_config.gamma_constraint}")
+                    qubo_dict = self.BQM_kmedoids_with_dimod_constraint(data)
+                    bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
+                    response = qa.submit(sampler, sample_method, bqm, **kwargs)
+                    valid_sample = self._find_valid_k_sample(response, self.n_clusters)
+                    if valid_sample is not None:
+                        return self._decode_clusters(valid_sample)
+            
+            for gamma_multiplier in [2, 4, 8, 16]:
+                for constraint_multiplier in [1, 2, 4, 8, 16, 32, 64, 128]:
+                    solver_config.gamma_constraint = initial_gamma_constraint * constraint_multiplier
+                    solver_config.gamma = initial_gamma * gamma_multiplier
+                    print(f"Trying with γ_cluster = {solver_config.gamma}, γ_constraint = {solver_config.gamma_constraint}")
+                    qubo_dict = self.BQM_kmedoids_with_dimod_constraint(data)
+                    bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
+                    response = qa.submit(sampler, sample_method, bqm, **kwargs)
+                    valid_sample = self._find_valid_k_sample(response, self.n_clusters)
+                    if valid_sample is not None:
+                        return self._decode_clusters(valid_sample)
+            
+            print(f"Warning: All fallback strategies exhausted. Falling back to forcevalid_k_solution.")
+            best_sample = response.first.sample
+            selected_indices = self._decode_clusters(best_sample)
+            return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
 
         if solver_config.use_quantum:
             sampler = EmbeddingComposite(DWaveSampler())
@@ -35,15 +67,13 @@ class QuboSolver:
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                self.config.quantum_kmedoids.gamma_constraint *= 2
-                if self.config.quantum_kmedoids.gamma_constraint < 1000:
-                    return self.run_QuboSolver(data, bqm_method)
-                else:
-                    print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
-                    best_sample = response.first.sample
-                    selected_indices = self._decode_clusters(best_sample)
-                    return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+                return try_fallback_strategy(
+                    response, 
+                    sampler, 
+                    EmbeddingComposite.sample, 
+                    num_reads=self.num_reads, 
+                    label="3 - Quantum Clustering (Fallback)"
+                )
 
         elif solver_config.use_hybrid:
             sampler = LeapHybridSampler()
@@ -53,44 +83,28 @@ class QuboSolver:
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                self.config.quantum_kmedoids.gamma_constraint *= 2
-                if self.config.quantum_kmedoids.gamma_constraint < 1000:
-                    return self.run_QuboSolver(data, bqm_method)
-                else:
-                    print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
-                    best_sample = response.first.sample
-                    selected_indices = self._decode_clusters(best_sample)
-                    return self._force_valid_k_solution(selected_indices, data, self.n_clusters)
+                return try_fallback_strategy(
+                    response, 
+                    sampler, 
+                    LeapHybridSampler.sample, 
+                    label="3 - Hybrid Clustering (Fallback)"
+                )
 
         else:
             sampler = SimulatedAnnealingSampler()
             response = qa.submit(sampler, SimulatedAnnealingSampler.sample, bqm, num_reads=self.num_reads, label="3 - Simulated Clustering")
-    
             valid_sample = self._find_valid_k_sample(response, self.n_clusters)
             
             if valid_sample is not None:
                 return self._decode_clusters(valid_sample)
             else:
-                print(f"Warning: No valid solution with exactly {self.n_clusters} medoids found. Trying with increased gamma.")
-                self.config.quantum_kmedoids.gamma_constraint *= 2
-                if self.config.quantum_kmedoids.gamma_constraint < 1000:
-                    return self.run_QuboSolver(data, bqm_method)
-                else:
-                    print(f"Warning: Exceeded maximum gamma value. Falling back to post-processing.")
-                    best_sample = response.first.sample
-                    selected_indices = self._decode_clusters(best_sample)
-                    return self._force_valid_k_solution(selected_indices, data, self.n_clusters)    
-
-        best_sample = response.first.sample
-        selected_medoids_count = sum(best_sample.values())
-        print(f"Selected {selected_medoids_count} medoids out of requested {self.n_clusters}")
-        
-        if solver_config.use_quantum or solver_config.use_hybrid:
-            if selected_medoids_count != self.n_clusters:
-                print(f"WARNING: QUBO solution has {selected_medoids_count} medoids instead of {self.n_clusters}")
-        
-        return self._decode_clusters(best_sample)
+                return try_fallback_strategy(
+                    response, 
+                    sampler, 
+                    SimulatedAnnealingSampler.sample, 
+                    num_reads=self.num_reads,
+                    label="3 - Simulated Clustering (Fallback)"
+                )
 
     def _find_valid_k_sample(self, response, k):
         """Find the first sample that satisfies the k-constraint"""
@@ -121,6 +135,7 @@ class QuboSolver:
         print(f"QUBO Matrix Min: {np.min(Q)}, Max: {np.max(Q)}, Mean: {np.mean(Q)}")
         print(f"QUBO Matrix Sample:\n{Q[:5, :5]}")
 
+
         return dictQ
 
     def BQM_kmedoids_with_combinations(self, data):
@@ -141,7 +156,7 @@ class QuboSolver:
             Q[(i, i)] = beta * np.sum(W[i])
         
         bqm = dmd.BinaryQuadraticModel.from_qubo(Q)
-        
+
         bqm_constraint = dmd.generators.combinations(N, self.n_clusters)
         
         gamma = self.config.quantum_kmedoids.gamma
