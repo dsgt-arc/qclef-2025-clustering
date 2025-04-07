@@ -78,7 +78,7 @@ def plot_embeddings(
     if cmap is None:
         cmap = plt.get_cmap('viridis')
     
-    default_color = cmap(0.5) if hasattr(cmap, '__call__') else "grey"
+    default_color = cmap(0.9) if hasattr(cmap, '__call__') else "grey"
 
     scatter = ax.scatter(
         reduced_embeddings[:, 0],

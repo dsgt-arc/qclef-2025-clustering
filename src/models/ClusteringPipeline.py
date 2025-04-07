@@ -49,7 +49,7 @@ def run_pipeline(config, colormap_name=None):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
     colormaps_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "colormaps"))
-    output_csv = os.path.join(data_dir, "antique_train_with_embeddings.csv")
+    output_csv = os.path.join(data_dir, "antique_doc_embeddings.csv")
 
     umap_plot_path = os.path.join(data_dir, "umap_plot.png")
     kmedoids_plot_path = os.path.join(data_dir, "kmedoids_clusters.png")
@@ -61,10 +61,10 @@ def run_pipeline(config, colormap_name=None):
     cmap = load_colormap(colormap_name, colormaps_dir)
     
     def parse_embedding(text):
-        return np.array(eval(text), dtype=np.float64)
+        return np.fromstring(text[1:-1], dtype=float, sep=',')
 
-    train_df = pd.read_csv(output_csv, converters={"doc_embedding": parse_embedding})
-    doc_embeddings = np.stack(train_df["doc_embedding"].values)
+    train_df = pd.read_csv(output_csv, converters={"doc_embeddings": parse_embedding})
+    doc_embeddings = np.stack(train_df["doc_embeddings"].values)
 
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
