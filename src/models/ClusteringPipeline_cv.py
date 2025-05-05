@@ -12,6 +12,7 @@ from tqdm import tqdm
 from sklearn.metrics import pairwise_distances
 from src.models.UMAPReducer import UMAPReducer
 from src.models.ClassicalClustering import ClassicalClustering
+from src.models.HDBSCANClustering import HDBSCANClustering  # Import the new HDBSCAN class
 from src.models.QuantumClustering import QuantumClustering, compute_clusters
 from box import ConfigBox
 from src.plot_utils import plot_embeddings, load_colormap
@@ -167,7 +168,8 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
     
     return np.mean(ndcg_scores) if ndcg_scores else 0.0
 
-def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, doc_ids, cv_folds=5):
+def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, doc_ids, 
+                      cv_folds=5, clustering_method='classical'):
     """
     Run cross-validation to evaluate clustering performance.
     
@@ -178,11 +180,12 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
         query_df: DataFrame with query information
         doc_ids: List of document IDs
         cv_folds: Number of CV folds
+        clustering_method: Which clustering method to use ('classical' or 'hdbscan')
         
     Returns:
         cv_results: Dictionary with CV results
     """
-    print("\n=== Starting Cross-Validation Evaluation ===")
+    print(f"\n=== Starting Cross-Validation Evaluation with {clustering_method.upper()} clustering ===")
     
     cv = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
     
@@ -201,8 +204,18 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
         train_doc_ids = [doc_ids[i] for i in train_idx]
         test_doc_ids = [doc_ids[i] for i in test_idx]
         
-        clustering = ClassicalClustering(**config.classical_clustering)
-        train_labels, medoid_indices = clustering.find_optimal_k(X_train)
+        # Choose clustering method based on parameter
+        if clustering_method == 'hdbscan':
+            clustering = HDBSCANClustering(**config.hdbscan_clustering)
+            train_labels, medoid_indices = clustering.find_optimal_k(X_train)
+            
+            # Handle noise points if necessary
+            if -1 in train_labels:
+                train_labels = clustering.handle_noise_points(X_train, train_labels, medoid_indices)
+        else:
+            clustering = ClassicalClustering(**config.classical_clustering)
+            train_labels, medoid_indices = clustering.find_optimal_k(X_train)
+            
         medoid_embeddings = clustering.extract_medoids(X_train, medoid_indices)
         
         quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
@@ -271,7 +284,7 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
     
     return cv_results
 
-def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5):
+def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering_method='classical'):
     """
     Run the clustering pipeline with a specified colormap and optional cross-validation.
     
@@ -280,6 +293,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5):
         colormap_name: Name of the colormap to use
         run_cv: Whether to run cross-validation evaluation
         cv_folds: Number of CV folds
+        clustering_method: Which clustering method to use ('classical' or 'hdbscan')
     """
     np.random.seed(config.classical_clustering.random_state)
 
@@ -290,7 +304,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5):
     query_csv = os.path.join(data_dir, "antique_train_queries.csv")
 
     umap_plot_path = os.path.join(data_dir, "umap_plot.png")
-    kmedoids_plot_path = os.path.join(data_dir, "kmedoids_clusters.png")
+    initial_clusters_plot_path = os.path.join(data_dir, f"{clustering_method}_clusters.png")
     final_clusters_plot_path = os.path.join(data_dir, "final_clusters.png")
 
     if colormap_name is None:
@@ -324,24 +338,41 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5):
             config,
             query_df,
             doc_ids,
-            cv_folds=cv_folds
+            cv_folds=cv_folds,
+            clustering_method=clustering_method
         )
         
         # Save CV results
         np.save(os.path.join(data_dir, "cv_results.npy"), cv_results)
     
-    # Run classical k-medoids clustering on full dataset
-    clustering = ClassicalClustering(**config.classical_clustering)
-    kmedoid_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
+    # Choose clustering method based on parameter
+    if clustering_method == 'hdbscan':
+        print("Using HDBSCAN clustering with overclustering...")
+        clustering = HDBSCANClustering(**config.hdbscan_clustering)
+        
+        # Get initial clusters
+        initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
+        
+        # Handle noise points (labeled as -1)
+        if -1 in initial_labels:
+            print("Handling noise points in HDBSCAN results...")
+            initial_labels = clustering.handle_noise_points(doc_embeddings_reduced, initial_labels, medoid_indices)
+        
+        plot_title = f"HDBSCAN Clustering (k={clustering.best_k})"
+    else:
+        print("Using Classical K-Medoids clustering...")
+        clustering = ClassicalClustering(**config.classical_clustering)
+        initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
+        plot_title = f"K-Medoids Clustering (k={clustering.best_k})"
 
-    print(f"Classical K-Medoids Labels: {kmedoid_labels}")
-    print(f"Classical Medoid Indices: {medoid_indices}")
+    print(f"{clustering_method.capitalize()} Clustering Labels: {initial_labels}")
+    print(f"{clustering_method.capitalize()} Medoid Indices: {medoid_indices}")
 
     medoid_embeddings = clustering.extract_medoids(doc_embeddings_reduced, medoid_indices)
     np.save(os.path.join(data_dir, "medoid_embeddings.npy"), medoid_embeddings)
     np.save(os.path.join(data_dir, "medoid_indices.npy"), medoid_indices)
-    plot_embeddings(doc_embeddings_reduced, labels=kmedoid_labels, medoids=medoid_embeddings,
-                title=f"K-Medoids Clustering (k={clustering.best_k})", save_path=kmedoids_plot_path, cmap=cmap)
+    plot_embeddings(doc_embeddings_reduced, labels=initial_labels, medoids=medoid_embeddings,
+                title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap)
 
     # Run quantum clustering with fixed parameters from config
     quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
@@ -352,7 +383,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5):
         refined_medoid_indices_of_embeddings = medoid_indices[refined_medoid_indices]
         refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices_of_embeddings] 
         
-        print(f"Before QUBO: Assignments to Classical Medoids: {compute_clusters(doc_embeddings_reduced, medoid_indices)}")
+        print(f"Before QUBO: Assignments to Initial Medoids: {compute_clusters(doc_embeddings_reduced, medoid_indices)}")
         print(f"Refined Medoid Indices Type: {type(refined_medoid_indices)}, Shape: {refined_medoid_indices.shape}")
         print(f"Refined Medoid Embeddings Shape: {refined_medoid_embeddings.shape}")
         print(f"Before Assigning Clusters, Medoid Indices: {refined_medoid_indices_of_embeddings}")
@@ -372,7 +403,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5):
         'doc_ids': doc_ids,
         'cluster_labels': final_cluster_labels.tolist(),
         'config': config,
-        'cv_results': cv_results
+        'cv_results': cv_results,
+        'clustering_method': clustering_method
     }
     
     # Save as numpy and json for different use cases
@@ -446,6 +478,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5):
 
     # Print evaluation summary
     print("\n=== Clustering Evaluation Summary ===")
+    print(f"Clustering Method: {clustering_method.upper()}")
     print(f"Number of clusters: {best_k}")
     print(f"Davies-Bouldin Index: {best_dbi:.4f}")
     print(f"Full dataset nDCG@10: {ndcg_10:.4f}")
@@ -464,15 +497,35 @@ if __name__ == "__main__":
                         help='Disable cross-validation evaluation')
     parser.add_argument('--cv_folds', type=int, default=5,
                         help='Number of CV folds')
+    parser.add_argument('--method', type=str, choices=['classical', 'hdbscan'], default='classical',
+                        help='Clustering method to use')
     
     args = parser.parse_args()
 
     with open("config/kmedoids.yml", "r") as file:
         config = ConfigBox(yaml.safe_load(file))
+    
+    # Load the HDBSCAN config if it exists, otherwise use defaults
+    try:
+        with open("config/hdbscan.yml", "r") as file:
+            hdbscan_config = ConfigBox(yaml.safe_load(file))
+            config.update(hdbscan_config)
+    except FileNotFoundError:
+        print("HDBSCAN config not found, using default parameters")
+        # Create minimal HDBSCAN config with default values
+        config.hdbscan_clustering = ConfigBox({
+            'min_cluster_size': 5,
+            'min_samples': None,
+            'cluster_selection_method': 'eom',
+            'cluster_selection_epsilon': 0.0,
+            'metric': 'euclidean',
+            'random_state': config.classical_clustering.random_state
+        })
 
     run_pipeline(
         config, 
         colormap_name=args.colormap,
         run_cv=not args.no_cv,
-        cv_folds=args.cv_folds
+        cv_folds=args.cv_folds,
+        clustering_method=args.method
     )

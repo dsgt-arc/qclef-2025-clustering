@@ -1,0 +1,22 @@
+# Configuration for HDBSCAN clustering
+hdbscan_clustering:
+  # Minimum size of clusters
+  min_cluster_size: 5
+  
+  # Number of samples in a neighborhood for a point to be considered a core point
+  # If None, uses the value of min_cluster_size
+  min_samples: null
+  
+  # The method used to select clusters from the condensed tree
+  # 'eom' (Excess of Mass) for overclustering, 'leaf' for standard clustering
+  cluster_selection_method: 'leaf'
+  
+  # Smaller values create more clusters (for overclustering)
+  # 0.0 is the default value for HDBSCAN
+  cluster_selection_epsilon: 0.2
+  
+  # Distance metric to use
+  metric: 'euclidean'
+  
+  # Random state for reproducibility
+  random_state: 42
