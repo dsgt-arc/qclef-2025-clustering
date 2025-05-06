@@ -15,3 +15,4 @@ matplotlib
 jupyter
 dwave-system
 python-box
+hdbscan
