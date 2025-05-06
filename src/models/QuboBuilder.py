@@ -254,7 +254,6 @@ class KMedoidsQuboBuilder(QuboBuilder):
             for j in range(i+1, N):
                 Q[i, j] += 2 * gamma
         
-        # Convert to upper triangular form
         Q = self.to_upper_triangular(Q)
         dictQ = self.matrix_to_dict(Q)
         

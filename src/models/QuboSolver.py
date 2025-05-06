@@ -24,19 +24,15 @@ class QuboSolver:
         if self.n_clusters is None:
             raise ValueError("n_clusters must be specified for run_QuboSolver")
             
-        # Create the QUBO builder
         builder = KMedoidsQuboBuilder(self.n_clusters, self.config)
         
-        # Map old method names to new ones
         method_mapping = {
             'kmedoids': 'auto_constraint'
         }
         
-        # Build the QUBO dictionary
         method = method_mapping.get(bqm_method, bqm_method)
         qubo_dict = builder.build_qubo(data, method=method)
         
-        # Solve the QUBO problem
         return self.solve(qubo_dict, self.n_clusters, data, builder)
     
     def solve(self, qubo_dict, n_clusters, data, builder):

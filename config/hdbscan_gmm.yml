@@ -1,0 +1,34 @@
+# Configuration for HDBSCAN-GMM hybrid clustering
+hdbscan_gmm_clustering:
+  # HDBSCAN parameters
+  # Minimum size of clusters
+  min_cluster_size: 5
+  
+  # Number of samples in a neighborhood for a point to be considered a core point
+  # If null, uses the value of min_cluster_size
+  min_samples: null
+  
+  # The method used to select clusters from the condensed tree
+  # 'leaf' for fewer, more stable clusters (recommended for this hybrid approach)
+  # 'eom' (Excess of Mass) for more fine-grained clusters
+  cluster_selection_method: 'leaf'
+  
+  # Higher epsilon values create smoother boundaries and fewer clusters
+  cluster_selection_epsilon: 0.2
+  
+  # GMM parameters
+  # Covariance type ('full', 'tied', 'diag', 'spherical')
+  # - 'full': Each component has its own general covariance matrix (most flexible)
+  # - 'tied': All components share the same general covariance matrix
+  # - 'diag': Each component has its own diagonal covariance matrix
+  # - 'spherical': Each component has its own single variance
+  covariance_type: 'full'
+  
+  # Number of initializations to perform for GMM
+  n_init: 10
+  
+  # Distance metric to use
+  metric: 'euclidean'
+  
+  # Random state for reproducibility
+  random_state: 42

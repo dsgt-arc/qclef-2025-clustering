@@ -1,0 +1,17 @@
+# Configuration for GMM clustering
+gmm_clustering:
+  # Range of number of components to try
+  n_components_range: [10, 25, 50, 75, 100]
+  
+  # Covariance type ('full', 'tied', 'diag', 'spherical')
+  # - 'full': Each component has its own general covariance matrix (most flexible)
+  # - 'tied': All components share the same general covariance matrix
+  # - 'diag': Each component has its own diagonal covariance matrix
+  # - 'spherical': Each component has its own single variance
+  covariance_type: 'full'
+  
+  # Number of initializations to perform
+  n_init: 10
+  
+  # Random state for reproducibility
+  random_state: 42
