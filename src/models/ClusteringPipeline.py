@@ -4,6 +4,9 @@ import pandas as pd
 import warnings
 import matplotlib.pyplot as plt
 import yaml
+import datetime
+import json
+from copy import deepcopy
 
 from sklearn.metrics import pairwise_distances
 from src.models.UMAPReducer import UMAPReducer
@@ -36,6 +39,7 @@ def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
 
     return best_k, best_indices, best_dbi
 
+
 def run_pipeline(config, colormap_name=None, clustering_method='classical', multi_membership=False, threshold=0.2):
     """
     Run the clustering pipeline with a specified colormap and clustering method.
@@ -47,16 +51,43 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
         multi_membership: Whether to create multi-membership assignments
         threshold: Probability threshold for multi-membership (default: 0.2)
     """
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    run_info = {
+        'timestamp': timestamp,
+        'clustering_method': clustering_method,
+        'colormap': colormap_name if colormap_name else "Spectral",
+        'multi_membership': multi_membership,
+        'threshold': threshold if multi_membership else None,
+        'quantum_refinement': True,
+        'hyperparameters': {},
+        'results': {}
+    }
+    
+    if clustering_method == 'classical':
+        run_info['hyperparameters']['classical'] = dict(config.classical_clustering)
+    elif clustering_method == 'hdbscan':
+        run_info['hyperparameters']['hdbscan'] = dict(config.hdbscan_clustering)
+    elif clustering_method == 'gmm':
+        run_info['hyperparameters']['gmm'] = dict(config.gmm_clustering)
+    elif clustering_method == 'hdbscan-gmm':
+        run_info['hyperparameters']['hdbscan_gmm'] = dict(config.hdbscan_gmm_clustering)
+    
+    run_info['hyperparameters']['quantum'] = dict(config.quantum_clustering)
+    
     np.random.seed(config.classical_clustering.random_state)
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
     colormaps_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "colormaps"))
     output_csv = os.path.join(data_dir, "antique_doc_embeddings.csv")
-
-    umap_plot_path = os.path.join(data_dir, "umap_plot.png")
-    initial_clusters_plot_path = os.path.join(data_dir, f"{clustering_method}_clusters.png")
-    final_clusters_plot_path = os.path.join(data_dir, "final_clusters.png")
+    
+    run_output_dir = os.path.join(data_dir, f"run_{timestamp}_{clustering_method}")
+    os.makedirs(run_output_dir, exist_ok=True)
+    
+    umap_plot_path = os.path.join(run_output_dir, f"umap_plot_{timestamp}.png")
+    initial_clusters_plot_path = os.path.join(run_output_dir, f"{clustering_method}_clusters_{timestamp}.png")
+    final_clusters_plot_path = os.path.join(run_output_dir, f"final_clusters_{timestamp}.png")
 
     if colormap_name is None:
         colormap_name = "Spectral"
@@ -72,13 +103,16 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
 
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
-    np.save(os.path.join(data_dir, "doc_embeddings_reduced.npy"), doc_embeddings_reduced)
-    plot_embeddings(doc_embeddings_reduced, title="UMAP Reduction", save_path=umap_plot_path, cmap=cmap)
+    np.save(os.path.join(run_output_dir, "doc_embeddings_reduced.npy"), doc_embeddings_reduced)
+    
+    umap_title = f"UMAP Reduction - {clustering_method.upper()} - {timestamp}"
+    plot_embeddings(doc_embeddings_reduced, title=umap_title, save_path=umap_plot_path, cmap=cmap)
 
     has_probabilities = clustering_method in ['gmm', 'hdbscan-gmm']
     if multi_membership and not has_probabilities:
         print(f"Warning: Multi-membership requires 'gmm' or 'hdbscan-gmm' method. Requested method '{clustering_method}' doesn't provide probabilities.")
         multi_membership = False
+        run_info['multi_membership'] = False
     
     if clustering_method == 'hdbscan':
         print("Using HDBSCAN clustering...")
@@ -90,7 +124,11 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
             print("Handling noise points in HDBSCAN results...")
             initial_labels = clustering.handle_noise_points(doc_embeddings_reduced, initial_labels, medoid_indices)
         
-        plot_title = f"HDBSCAN Clustering (k={clustering.best_k})"
+        initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
+        run_info['results']['initial_clusters'] = clustering.best_k
+        run_info['results']['initial_dbi'] = float(initial_dbi)
+        
+        plot_title = f"HDBSCAN Clustering (k={clustering.best_k}, DBI={initial_dbi:.4f}) - {timestamp}"
         
     elif clustering_method == 'gmm':
         print("Using Gaussian Mixture Model clustering...")
@@ -99,19 +137,23 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
         
         membership_probs = clustering.get_membership_probabilities()
-        np.save(os.path.join(data_dir, "gmm_membership_probs.npy"), membership_probs)
+        np.save(os.path.join(run_output_dir, "gmm_membership_probs.npy"), membership_probs)
         
         top_docs = clustering.get_top_documents_per_cluster(doc_ids, n=10)
-        with open(os.path.join(data_dir, "top_docs_per_cluster.txt"), 'w') as f:
+        with open(os.path.join(run_output_dir, "top_docs_per_cluster.txt"), 'w') as f:
             for cluster_id, docs in top_docs.items():
                 f.write(f"Cluster {cluster_id}:\n")
                 for doc_id, prob in docs:
                     f.write(f"  {doc_id}: {prob:.4f}\n")
                 f.write("\n")
         
-        clustering.save_cluster_membership(doc_ids, os.path.join(data_dir, "cluster_membership.csv"))
+        clustering.save_cluster_membership(doc_ids, os.path.join(run_output_dir, "cluster_membership.csv"))
         
-        plot_title = f"GMM Clustering (k={clustering.best_k})"
+        initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
+        run_info['results']['initial_clusters'] = clustering.best_k
+        run_info['results']['initial_dbi'] = float(initial_dbi)
+        
+        plot_title = f"GMM Clustering (k={clustering.best_k}, DBI={initial_dbi:.4f}) - {timestamp}"
         
     elif clustering_method == 'hdbscan-gmm':
         print("Using HDBSCAN-GMM hybrid clustering...")
@@ -120,32 +162,41 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
         
         membership_probs = clustering.get_membership_probabilities()
-        np.save(os.path.join(data_dir, "hdbscan_gmm_membership_probs.npy"), membership_probs)
+        np.save(os.path.join(run_output_dir, "hdbscan_gmm_membership_probs.npy"), membership_probs)
         
         top_docs = clustering.get_top_documents_per_cluster(doc_ids, n=10)
-        with open(os.path.join(data_dir, "hdbscan_gmm_top_docs_per_cluster.txt"), 'w') as f:
+        with open(os.path.join(run_output_dir, "hdbscan_gmm_top_docs_per_cluster.txt"), 'w') as f:
             for cluster_id, docs in top_docs.items():
                 f.write(f"Cluster {cluster_id}:\n")
                 for doc_id, prob in docs:
                     f.write(f"  {doc_id}: {prob:.4f}\n")
                 f.write("\n")
         
-        clustering.save_cluster_membership(doc_ids, os.path.join(data_dir, "hdbscan_gmm_cluster_membership.csv"))
+        clustering.save_cluster_membership(doc_ids, os.path.join(run_output_dir, "hdbscan_gmm_cluster_membership.csv"))
         
-        plot_title = f"HDBSCAN-GMM Clustering (k={clustering.best_k})"
+        initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
+        run_info['results']['initial_clusters'] = clustering.best_k
+        run_info['results']['initial_dbi'] = float(initial_dbi)
+        
+        plot_title = f"HDBSCAN-GMM Clustering (k={clustering.best_k}, DBI={initial_dbi:.4f}) - {timestamp}"
         
     else:
         print("Using Classical K-Medoids clustering...")
         clustering = ClassicalClustering(**config.classical_clustering)
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
-        plot_title = f"K-Medoids Clustering (k={clustering.best_k})"
+        
+        initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
+        run_info['results']['initial_clusters'] = clustering.best_k
+        run_info['results']['initial_dbi'] = float(initial_dbi)
+        
+        plot_title = f"K-Medoids Clustering (k={clustering.best_k}, DBI={initial_dbi:.4f}) - {timestamp}"
 
     print(f"{clustering_method.capitalize()} Clustering Labels: {initial_labels}")
     print(f"{clustering_method.capitalize()} Medoid Indices: {medoid_indices}")
 
     medoid_embeddings = clustering.extract_medoids(doc_embeddings_reduced, medoid_indices)
-    np.save(os.path.join(data_dir, "medoid_embeddings.npy"), medoid_embeddings)
-    np.save(os.path.join(data_dir, "medoid_indices.npy"), medoid_indices)
+    np.save(os.path.join(run_output_dir, "medoid_embeddings.npy"), medoid_embeddings)
+    np.save(os.path.join(run_output_dir, "medoid_indices.npy"), medoid_indices)
     plot_embeddings(doc_embeddings_reduced, labels=initial_labels, medoids=medoid_embeddings,
                 title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap)
 
@@ -164,26 +215,28 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
         final_cluster_labels = compute_clusters(doc_embeddings_reduced, refined_medoid_indices_of_embeddings)
         print(f"After QUBO: Assignments to Quantum Medoids: {final_cluster_labels}")
 
+        run_info['results']['final_clusters'] = int(best_k)
+        run_info['results']['final_dbi'] = float(best_dbi)
     else:
         raise ValueError("QUBO Solver failed to find valid medoids.")
     
     print(f"Final chosen k after QUBO clustering: {best_k}")
     print(f"Final DBI: {best_dbi:.4f}")
 
-    np.save(os.path.join(data_dir, "final_quantum_clusters.npy"), final_cluster_labels)
-    np.save(os.path.join(data_dir, "refined_medoid_embeddings.npy"), refined_medoid_embeddings)
-    np.save(os.path.join(data_dir, "refined_medoid_indices.npy"), refined_medoid_indices)
+    np.save(os.path.join(run_output_dir, "final_quantum_clusters.npy"), final_cluster_labels)
+    np.save(os.path.join(run_output_dir, "refined_medoid_embeddings.npy"), refined_medoid_embeddings)
+    np.save(os.path.join(run_output_dir, "refined_medoid_indices.npy"), refined_medoid_indices)
     
     cluster_mapping = pd.DataFrame({
         'doc_id': doc_ids,
         'cluster': final_cluster_labels
     })
-    cluster_mapping.to_csv(os.path.join(data_dir, "doc_clusters.csv"), index=False)
+    cluster_mapping.to_csv(os.path.join(run_output_dir, "doc_clusters.csv"), index=False)
 
     if has_probabilities:
         if hasattr(clustering, 'membership_probs'):
             if multi_membership:
-                create_multi_membership_assignments(
+                multi_membership_df = create_multi_membership_assignments(
                     doc_ids,
                     doc_embeddings_reduced,
                     clustering.membership_probs,
@@ -191,32 +244,68 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
                     refined_medoid_indices_of_embeddings,
                     refined_medoid_embeddings,
                     threshold=threshold,
-                    data_dir=data_dir,
+                    data_dir=run_output_dir,
                     prefix=clustering_method
                 )
+                
+                membership_counts = multi_membership_df['membership_count'].values
+                run_info['results']['multi_membership'] = {
+                    'avg_memberships': float(np.mean(membership_counts)),
+                    'max_memberships': int(np.max(membership_counts)),
+                    'docs_with_multiple': int(np.sum(membership_counts > 1)),
+                    'percent_multi': float((np.sum(membership_counts > 1) / len(doc_ids)) * 100)
+                }
             
             create_hybrid_probabilistic_assignments(
                 doc_ids,
                 clustering.membership_probs,
                 final_cluster_labels,
                 refined_medoid_indices_of_embeddings,
-                data_dir,
+                run_output_dir,
                 prefix=clustering_method
             )
 
     print(f"Final Quantum-Refined Medoid Embeddings:\n {refined_medoid_embeddings}")
     print(f"Unique Cluster Assignments: {np.unique(final_cluster_labels)}")
 
+    final_plot_title = (f"Final Quantum Cluster Assignments - {clustering_method.upper()} - "
+                        f"k={best_k}, DBI={best_dbi:.4f} - {timestamp}")
+    
     plot_embeddings(doc_embeddings_reduced,
                 labels=final_cluster_labels,
                 medoids=medoid_embeddings,
                 refined_medoids=refined_medoid_embeddings,
-                title="Final Quantum Cluster Assignments",
+                title=final_plot_title,
                 save_path=final_clusters_plot_path,
                 cmap=cmap)
 
     print(f"Saved final quantum cluster plot at: {final_clusters_plot_path}")
+    
+    run_info_path = os.path.join(run_output_dir, f"run_info_{timestamp}.json")
+    with open(run_info_path, 'w') as f:
+        json.dump(run_info, f, indent=2)
+    print(f"Saved run information to {run_info_path}")
+    
+    summary_path = os.path.join(data_dir, f"run_summary_{clustering_method}_{timestamp}.json")
+    with open(summary_path, 'w') as f:
+        json.dump(run_info, f, indent=2)
+    
+    print("\n=== Clustering Run Summary ===")
+    print(f"Timestamp: {timestamp}")
+    print(f"Method: {clustering_method}" + (" with Multi-Membership" if multi_membership else ""))
+    print(f"Initial Clusters: {run_info['results']['initial_clusters']}, DBI: {run_info['results']['initial_dbi']:.4f}")
+    print(f"Final Clusters: {run_info['results']['final_clusters']}, DBI: {run_info['results']['final_dbi']:.4f}")
+    if multi_membership and has_probabilities:
+        mm_stats = run_info['results']['multi_membership']
+        print(f"Multi-Membership: {mm_stats['percent_multi']:.1f}% of documents belong to multiple clusters")
+        print(f"Average memberships per document: {mm_stats['avg_memberships']:.2f}")
+    print(f"All results saved to: {run_output_dir}")
+    print("===============================")
+    
     plt.show()
+    
+    return run_info
+
 
 def create_hybrid_probabilistic_assignments(doc_ids, initial_probs, quantum_labels, quantum_medoid_indices, data_dir, prefix=''):
     """
@@ -281,6 +370,7 @@ def create_hybrid_probabilistic_assignments(doc_ids, initial_probs, quantum_labe
 
 if __name__ == "__main__":
     import argparse
+    from sklearn.metrics import davies_bouldin_score
     
     parser = argparse.ArgumentParser(description='Run clustering pipeline with custom colormap')
     parser.add_argument('--colormap', type=str, default='Spectral', 
