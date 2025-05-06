@@ -42,8 +42,8 @@ def plot_embeddings(embeddings, labels=None, medoids=None, refined_medoids=None,
     ax.spines['left'].set_visible(True)
     ax.spines['bottom'].set_visible(True)
     
-    ax.spines['left'].set_color('#999999')
-    ax.spines['bottom'].set_color('#999999')
+    ax.spines['left'].set_color('black')
+    ax.spines['bottom'].set_color('black')
     
     ax.set_axisbelow(True)
         
@@ -158,8 +158,8 @@ def plot_cluster_spectrum(
     ax.spines['left'].set_visible(True)
     ax.spines['bottom'].set_visible(True)
     
-    ax.spines['left'].set_color('#999999')
-    ax.spines['bottom'].set_color('#999999')
+    ax.spines['left'].set_color('black')
+    ax.spines['bottom'].set_color('black')
     
     ax.set_axisbelow(True)
     
