@@ -7,6 +7,7 @@ import yaml
 import datetime
 import json
 from copy import deepcopy
+from sklearn.preprocessing import normalize
 
 from sklearn.metrics import pairwise_distances, davies_bouldin_score
 from src.models.UMAPReducer import UMAPReducer
@@ -20,6 +21,130 @@ from box import ConfigBox
 from src.plot_utils import plot_embeddings, load_colormap, plot_cluster_spectrum
 
 warnings.filterwarnings("ignore")
+
+def dcg_at_k(r, k):
+    """
+    Compute Discounted Cumulative Gain at rank k.
+    r: List of relevance scores in rank order
+    k: Rank position to calculate DCG at
+    """
+    r = np.asfarray(r)[:k]
+    if r.size:
+        return np.sum(r / np.log2(np.arange(2, r.size + 2)))
+    return 0.0
+
+def ndcg_at_k(r, k):
+    """
+    Compute Normalized Discounted Cumulative Gain at rank k.
+    r: List of relevance scores in rank order
+    k: Rank position to calculate NDCG at
+    """
+    dcg_max = dcg_at_k(sorted(r, reverse=True), k)
+    if not dcg_max:
+        return 0.0
+    return dcg_at_k(r, k) / dcg_max
+
+def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assignments, 
+                      qrels_df, doc_ids, k=10, umap_reducer=None):
+    """
+    Evaluate retrieval performance using nDCG@k and relevant coverage.
+    
+    Args:
+        query_embeddings: Embeddings of queries
+        doc_embeddings: Embeddings of documents
+        centroids: Cluster centroids in reduced space
+        cluster_assignments: Cluster assignments for each document
+        qrels_df: DataFrame with relevance judgments (query_id, doc_id, relevance)
+        doc_ids: List of document IDs corresponding to doc_embeddings
+        k: Cutoff for nDCG calculation (default: 10)
+        umap_reducer: UMAP reducer to reduce query embeddings to same dimension as centroids
+    
+    Returns:
+        Dictionary with 'ndcg': Average nDCG@k across all queries and 'coverage': Average relevant coverage
+    """
+    doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(doc_ids)}
+    
+    if umap_reducer is not None:
+        query_embeddings_reduced = umap_reducer.transform(query_embeddings)
+        query_embeddings_norm = normalize(query_embeddings_reduced)
+    else:
+        query_embeddings_norm = normalize(query_embeddings)
+    
+    centroids_norm = normalize(centroids)
+    doc_embeddings_norm = normalize(doc_embeddings)
+    
+    ndcg_scores = []
+    coverage_scores = []
+    
+    query_ids = qrels_df['query_id'].unique()
+    
+    for q_idx, query_id in enumerate(query_ids):
+        query_qrels = qrels_df[qrels_df['query_id'] == query_id]
+        
+        if len(query_qrels) == 0:
+            continue
+        
+        judged_doc_ids = set(query_qrels['doc_id'].values)
+        relevant_doc_ids = set(query_qrels[query_qrels['relevance'] > 0]['doc_id'].values)
+        
+        if not relevant_doc_ids:
+            continue
+            
+        query_embedding = query_embeddings_norm[q_idx].reshape(1, -1)
+        
+        centroid_similarities = np.dot(query_embedding, centroids_norm.T)[0]
+        closest_centroid_idx = np.argmax(centroid_similarities)
+        
+        cluster_docs_idx = np.where(cluster_assignments == closest_centroid_idx)[0]
+        
+        if len(cluster_docs_idx) == 0:
+            ndcg_scores.append(0.0)
+            coverage_scores.append(0.0)
+            continue
+        
+        cluster_doc_ids = [doc_ids[idx] for idx in cluster_docs_idx]
+        
+        retrieved_relevant = relevant_doc_ids.intersection(set(cluster_doc_ids))
+        coverage = len(retrieved_relevant) / len(relevant_doc_ids) if relevant_doc_ids else 0.0
+        coverage_scores.append(coverage)
+        
+        cluster_doc_embeddings = doc_embeddings_norm[cluster_docs_idx]
+        
+        if umap_reducer is not None:
+            doc_similarities = np.dot(query_embedding, cluster_doc_embeddings.T)[0]
+        else:
+            orig_query = normalize(query_embeddings[q_idx].reshape(1, -1))
+            orig_docs = normalize(doc_embeddings[cluster_docs_idx])
+            doc_similarities = np.dot(orig_query, orig_docs.T)[0]
+        
+        sorted_indices = np.argsort(-doc_similarities)
+        ranked_cluster_indices = [cluster_docs_idx[idx] for idx in sorted_indices]
+        ranked_doc_ids = [doc_ids[idx] for idx in ranked_cluster_indices]
+        
+        relevance_scores = []
+        for doc_id in ranked_doc_ids[:k]:
+            rel_values = query_qrels[query_qrels['doc_id'] == doc_id]['relevance'].values
+            if len(rel_values) > 0:
+                relevance_scores.append(float(rel_values[0]))
+            else:
+                relevance_scores.append(0.0)
+        
+        ndcg = ndcg_at_k(relevance_scores, k)
+        ndcg_scores.append(ndcg)
+        
+        if q_idx < 5:
+            judged_docs_found = len(set(cluster_doc_ids).intersection(judged_doc_ids))
+            total_judged = len(judged_doc_ids)
+            print(f"Query {query_id}: Found {judged_docs_found}/{total_judged} judged docs, "
+                  f"{len(retrieved_relevant)}/{len(relevant_doc_ids)} relevant docs in cluster {closest_centroid_idx}, "
+                  f"nDCG@{k}: {ndcg:.4f}, Coverage: {coverage:.4f}")
+    
+    results = {
+        'ndcg': np.mean(ndcg_scores) if ndcg_scores else 0.0,
+        'coverage': np.mean(coverage_scores) if coverage_scores else 0.0
+    }
+    
+    return results
 
 def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
     """Iterate over k_range and find the best k using QUBO clustering."""
@@ -81,6 +206,7 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
     colormaps_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "colormaps"))
     output_csv = os.path.join(data_dir, "antique_doc_embeddings.csv")
+    query_csv = os.path.join(data_dir, "antique_train_queries.csv")
     
     run_output_dir = os.path.join(data_dir, f"run_{timestamp}_{clustering_method}")
     os.makedirs(run_output_dir, exist_ok=True)
@@ -101,6 +227,8 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     train_df = pd.read_csv(output_csv, converters={"doc_embeddings": parse_embedding})
     doc_embeddings = np.stack(train_df["doc_embeddings"].values)
     doc_ids = train_df['doc_id'].tolist()
+
+    query_df = pd.read_csv(query_csv)
 
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
@@ -301,6 +429,54 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     print(f"Final Quantum-Refined Medoid Embeddings:\n {refined_medoid_embeddings}")
     print(f"Unique Cluster Assignments: {np.unique(final_cluster_labels)}")
 
+    print("\nEvaluating retrieval metrics on full dataset...")
+    try:
+        query_df['query_embeddings'] = query_df['query_embeddings'].apply(
+            lambda x: np.fromstring(x[1:-1], dtype=float, sep=',') if isinstance(x, str) else x
+        )
+        
+        valid_queries = query_df[query_df['query_embeddings'].apply(lambda x: isinstance(x, np.ndarray) and len(x) > 0)]
+        
+        if len(valid_queries) > 0:
+            first_shape = len(valid_queries['query_embeddings'].iloc[0])
+            valid_queries = valid_queries[valid_queries['query_embeddings'].apply(lambda x: len(x) == first_shape)]
+            
+            if len(valid_queries) > 0:
+                query_embeddings = np.stack(valid_queries["query_embeddings"].values)
+                qrels_df = valid_queries[['query_id', 'doc_id', 'relevance']]
+                
+                evaluation_results = evaluate_retrieval(
+                    query_embeddings,
+                    doc_embeddings_reduced,
+                    refined_medoid_embeddings,
+                    final_cluster_labels,
+                    qrels_df,
+                    doc_ids,
+                    k=10,
+                    umap_reducer=umap_reducer
+                )
+                
+                ndcg_10 = evaluation_results['ndcg']
+                coverage = evaluation_results['coverage']
+                
+                print(f"Full dataset nDCG@10: {ndcg_10:.4f}")
+                print(f"Full dataset Relevant Coverage: {coverage:.4f}")
+                
+                run_info['results']['ndcg_10'] = float(ndcg_10)
+                run_info['results']['relevant_coverage'] = float(coverage)
+            else:
+                print("No valid queries with consistent embedding dimensions found.")
+                run_info['results']['ndcg_10'] = 0.0
+                run_info['results']['relevant_coverage'] = 0.0
+        else:
+            print("No valid query embeddings found.")
+            run_info['results']['ndcg_10'] = 0.0
+            run_info['results']['relevant_coverage'] = 0.0
+    except Exception as e:
+        print(f"Error evaluating retrieval metrics on full dataset: {str(e)}")
+        run_info['results']['ndcg_10'] = 0.0
+        run_info['results']['relevant_coverage'] = 0.0
+
     final_plot_title = "Final Quantum Cluster Assignments\n" + \
                       f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
     
@@ -342,6 +518,7 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     print(f"Method: {clustering_method}" + (" with Multi-Membership" if multi_membership else ""))
     print(f"Initial Clusters: {run_info['results']['initial_clusters']}, DBI: {run_info['results']['initial_dbi']:.4f}")
     print(f"Final Clusters: {run_info['results']['final_clusters']}, DBI: {run_info['results']['final_dbi']:.4f}")
+    print(f"nDCG@10: {run_info['results']['ndcg_10']:.4f}, Relevant Coverage: {run_info['results']['relevant_coverage']:.4f}")
     if multi_membership and has_probabilities:
         mm_stats = run_info['results']['multi_membership']
         print(f"Multi-Membership: {mm_stats['percent_multi']:.1f}% of documents belong to multiple clusters")
@@ -352,7 +529,6 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     plt.show()
     
     return run_info
-
 
 def create_hybrid_probabilistic_assignments(doc_ids, initial_probs, quantum_labels, quantum_medoid_indices, data_dir, prefix=''):
     """
