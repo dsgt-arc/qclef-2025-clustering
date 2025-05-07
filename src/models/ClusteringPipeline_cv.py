@@ -11,6 +11,7 @@ from sklearn.metrics import davies_bouldin_score
 from sklearn.preprocessing import normalize
 from tqdm import tqdm
 from copy import deepcopy
+from collections import defaultdict
 
 from sklearn.metrics import pairwise_distances
 from src.models.UMAPReducer import UMAPReducer
@@ -24,6 +25,34 @@ from box import ConfigBox
 from src.plot_utils import plot_embeddings, load_colormap, plot_cluster_spectrum
 
 warnings.filterwarnings("ignore")
+
+def track_cluster_correspondence(initial_labels, final_labels):
+    """
+    Track how clusters change between initial and final clustering.
+    
+    Args:
+        initial_labels: Cluster labels from initial clustering
+        final_labels: Cluster labels after refinement
+        
+    Returns:
+        Dictionary mapping final cluster IDs to most corresponding initial cluster IDs
+    """
+    correspondence = {}
+    
+    overlap_counts = defaultdict(lambda: defaultdict(int))
+    
+    for i, (init_label, final_label) in enumerate(zip(initial_labels, final_labels)):
+        overlap_counts[final_label][init_label] += 1
+    
+    for final_cluster in np.unique(final_labels):
+        if len(overlap_counts[final_cluster]) > 0:
+            init_cluster = max(overlap_counts[final_cluster].items(), 
+                              key=lambda x: x[1])[0]
+            correspondence[final_cluster] = init_cluster
+        else:
+            correspondence[final_cluster] = final_cluster
+    
+    return correspondence
 
 def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
     """Iterate over k_range and find the best k using QUBO clustering."""
@@ -266,6 +295,8 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
     dbi_scores = []
     ndcg_scores = []
     coverage_scores = []
+    ndcg_multi_scores = []
+    coverage_multi_scores = []
     
     query_df['query_embeddings'] = query_df['query_embeddings'].apply(
         lambda x: np.fromstring(x[1:-1], dtype=float, sep=',') if isinstance(x, str) else x
@@ -289,7 +320,9 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
         train_doc_ids = [doc_ids[i] for i in train_idx]
         test_doc_ids = [doc_ids[i] for i in test_idx]
         
-        # Apply the appropriate clustering method
+        has_probabilities = clustering_method in ['gmm', 'hdbscan-gmm']
+        multi_membership_df = None
+        
         if clustering_method == 'hdbscan':
             clustering = HDBSCANClustering(**config.hdbscan_clustering)
             train_labels, medoid_indices = clustering.find_optimal_k(X_train)
@@ -302,7 +335,7 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
         elif clustering_method == 'hdbscan-gmm':
             clustering = HDBSCANGMMClustering(**config.hdbscan_gmm_clustering)
             train_labels, medoid_indices = clustering.find_optimal_k(X_train)
-        else:  # 'classical' is the default
+        else:
             clustering = ClassicalClustering(**config.classical_clustering)
             train_labels, medoid_indices = clustering.find_optimal_k(X_train)
             
@@ -318,6 +351,8 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
             distances = pairwise_distances(X_test, refined_medoid_embeddings)
             test_labels = np.argmin(distances, axis=1)
             
+            color_correspondence = track_cluster_correspondence(train_labels, test_labels)
+            
             test_dbi = compute_dbi(X_test, test_labels)
             dbi_scores.append(test_dbi)
             
@@ -325,6 +360,53 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
             umap_reducer.fit(doc_embeddings[train_idx])
             
             test_qrels = qrels_df[qrels_df['doc_id'].isin(test_doc_ids)]
+            
+            if has_probabilities and hasattr(clustering, 'membership_probs'):
+                threshold = 0.2
+                
+                n_quantum_clusters = len(np.unique(test_labels))
+                n_test_docs = len(test_doc_ids)
+                
+                quantum_probs = np.zeros((n_test_docs, n_quantum_clusters))
+                
+                component_to_quantum = {}
+                for comp_idx in range(clustering.membership_probs.shape[1]):
+                    counts = np.zeros(n_quantum_clusters)
+                    for doc_idx, prob in enumerate(clustering.membership_probs[train_idx], 0):
+                        if prob > 0.1:
+                            quantum_cluster = test_labels[doc_idx]
+                            counts[quantum_cluster] += prob
+                    
+                    if np.sum(counts) > 0:
+                        component_to_quantum[comp_idx] = np.argmax(counts)
+                
+                for doc_idx in range(n_test_docs):
+                    doc_probs = clustering.membership_probs[test_idx[doc_idx], :]
+                    
+                    for comp_idx, quantum_idx in component_to_quantum.items():
+                        quantum_probs[doc_idx, quantum_idx] += doc_probs[comp_idx]
+                
+                row_sums = quantum_probs.sum(axis=1, keepdims=True)
+                quantum_probs = np.divide(quantum_probs, row_sums, 
+                                        out=np.zeros_like(quantum_probs), 
+                                        where=row_sums != 0)
+                
+                data = {
+                    'doc_id': test_doc_ids,
+                    'primary_cluster': test_labels
+                }
+                
+                multi_memberships = []
+                for doc_idx in range(n_test_docs):
+                    doc_clusters = np.where(quantum_probs[doc_idx, :] >= threshold)[0]
+                    if len(doc_clusters) == 0:
+                        doc_clusters = [np.argmax(quantum_probs[doc_idx, :])]
+                    multi_memberships.append(doc_clusters.tolist())
+                
+                data['multi_membership'] = multi_memberships
+                data['membership_count'] = [len(clusters) for clusters in multi_memberships]
+                
+                multi_membership_df = pd.DataFrame(data)
             
             if not test_qrels.empty:
                 eval_results = evaluate_retrieval(
@@ -335,13 +417,19 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
                     test_qrels,
                     test_doc_ids,
                     k=10,
-                    umap_reducer=umap_reducer
+                    umap_reducer=umap_reducer,
+                    multi_cluster_assignments=multi_membership_df
                 )
                 
                 ndcg_scores.append(eval_results['ndcg'])
                 coverage_scores.append(eval_results['coverage'])
                 
-                print(f"Test DBI: {test_dbi:.4f}, Test nDCG@10: {eval_results['ndcg']:.4f}, Coverage: {eval_results['coverage']:.4f}")
+                if 'ndcg_multi' in eval_results:
+                    ndcg_multi_scores.append(eval_results['ndcg_multi'])
+                    coverage_multi_scores.append(eval_results['coverage_multi'])
+                    print(f"Test DBI: {test_dbi:.4f}, Test nDCG@10: {eval_results['ndcg']:.4f}, Coverage: {eval_results['coverage']:.4f}, Multi-nDCG@10: {eval_results['ndcg_multi']:.4f}, Multi-Coverage: {eval_results['coverage_multi']:.4f}")
+                else:
+                    print(f"Test DBI: {test_dbi:.4f}, Test nDCG@10: {eval_results['ndcg']:.4f}, Coverage: {eval_results['coverage']:.4f}")
             else:
                 print(f"Test DBI: {test_dbi:.4f}, No relevant queries found for test documents")
         else:
@@ -373,21 +461,102 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
         avg_cov = 0
         std_cov = 0
     
+    if ndcg_multi_scores:
+        avg_ndcg_multi = np.mean(ndcg_multi_scores)
+        std_ndcg_multi = np.std(ndcg_multi_scores)
+        print(f"Average Multi-nDCG@10 across {cv_folds} folds: {avg_ndcg_multi:.4f} ± {std_ndcg_multi:.4f}")
+        
+        avg_cov_multi = np.mean(coverage_multi_scores)
+        std_cov_multi = np.std(coverage_multi_scores)
+        print(f"Average Multi-Coverage across {cv_folds} folds: {avg_cov_multi:.4f} ± {std_cov_multi:.4f}")
+    else:
+        avg_ndcg_multi = 0
+        std_ndcg_multi = 0
+        avg_cov_multi = 0
+        std_cov_multi = 0
+    
     cv_results = {
         'dbi_scores': dbi_scores,
         'ndcg_scores': ndcg_scores,
         'coverage_scores': coverage_scores,
+        'ndcg_multi_scores': ndcg_multi_scores,
+        'coverage_multi_scores': coverage_multi_scores,
         'avg_dbi': avg_dbi,
         'std_dbi': std_dbi,
         'avg_ndcg': avg_ndcg,
         'std_ndcg': std_ndcg,
         'avg_coverage': avg_cov,
-        'std_coverage': std_cov
+        'std_coverage': std_cov,
+        'avg_ndcg_multi': avg_ndcg_multi,
+        'std_ndcg_multi': std_ndcg_multi,
+        'avg_coverage_multi': avg_cov_multi,
+        'std_coverage_multi': std_cov_multi
     }
     
     print("=== Cross-Validation Evaluation Complete ===")
     
     return cv_results
+
+
+def create_hybrid_probabilistic_assignments(doc_ids, initial_probs, quantum_labels, quantum_medoid_indices, data_dir, prefix=''):
+    """
+    Create hybrid probabilistic assignments combining initial probabilities with quantum clustering.
+    
+    Args:
+        doc_ids: List of document IDs
+        initial_probs: Initial membership probabilities (from GMM or HDBSCAN-GMM)
+        quantum_labels: Quantum-refined cluster labels
+        quantum_medoid_indices: Quantum-refined medoid indices
+        data_dir: Data directory to save results
+        prefix: Prefix for output files (empty, 'gmm', or 'hdbscan-gmm')
+    """
+    prefix = f"{prefix}_" if prefix else ""
+    print(f"Creating hybrid probabilistic assignments with {prefix}probabilities...")
+    
+    n_components = initial_probs.shape[1]
+    
+    n_quantum_clusters = len(np.unique(quantum_labels))
+    
+    component_to_quantum = {}
+    
+    for comp_idx in range(n_components):
+        counts = np.zeros(n_quantum_clusters)
+        for doc_idx, prob in enumerate(initial_probs[:, comp_idx]):
+            if prob > 0.2:
+                quantum_cluster = quantum_labels[doc_idx]
+                counts[quantum_cluster] += prob
+        
+        if np.sum(counts) > 0:
+            component_to_quantum[comp_idx] = np.argmax(counts)
+    
+    n_docs = len(doc_ids)
+    hybrid_probs = np.zeros((n_docs, n_quantum_clusters))
+    
+    for doc_idx in range(n_docs):
+        doc_probs = initial_probs[doc_idx, :]
+        
+        for comp_idx, quantum_idx in component_to_quantum.items():
+            hybrid_probs[doc_idx, quantum_idx] += doc_probs[comp_idx]
+    
+    row_sums = hybrid_probs.sum(axis=1, keepdims=True)
+    hybrid_probs = np.divide(hybrid_probs, row_sums, out=np.zeros_like(hybrid_probs), where=row_sums != 0)
+    
+    np.save(os.path.join(data_dir, f"{prefix}hybrid_cluster_probs.npy"), hybrid_probs)
+    
+    data = {
+        'doc_id': doc_ids
+    }
+    
+    for cluster_id in range(n_quantum_clusters):
+        data[f'quantum_cluster_{cluster_id}_prob'] = hybrid_probs[:, cluster_id]
+    
+    data['most_likely_cluster'] = np.argmax(hybrid_probs, axis=1)
+    data['quantum_cluster'] = quantum_labels
+    
+    df = pd.DataFrame(data)
+    df.to_csv(os.path.join(data_dir, f"{prefix}hybrid_cluster_membership.csv"), index=False)
+    
+    print(f"Saved hybrid probabilistic assignments to {os.path.join(data_dir, f'{prefix}hybrid_cluster_membership.csv')}")
 
 
 def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering_method='classical', multi_membership=False, threshold=0.2):
@@ -474,7 +643,6 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         multi_membership = False
         run_info['multi_membership'] = False
     
-    # Run cross-validation if requested
     cv_results = None
     if run_cv:
         cv_results = run_cv_evaluation(
@@ -570,11 +738,23 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     print(f"{clustering_method.capitalize()} Clustering Labels: {initial_labels}")
     print(f"{clustering_method.capitalize()} Medoid Indices: {medoid_indices}")
 
+    unique_initial_labels = np.unique(initial_labels)
+    n_initial_clusters = len(unique_initial_labels)
+    
+    initial_colors = {}
+    for i, label in enumerate(unique_initial_labels):
+        if isinstance(cmap, str):
+            color_value = plt.get_cmap(cmap)(i / max(1, n_initial_clusters - 1))
+        else:
+            color_value = cmap(i / max(1, n_initial_clusters - 1))
+        initial_colors[label] = color_value
+
     medoid_embeddings = clustering.extract_medoids(doc_embeddings_reduced, medoid_indices)
     np.save(os.path.join(run_output_dir, "medoid_embeddings.npy"), medoid_embeddings)
     np.save(os.path.join(run_output_dir, "medoid_indices.npy"), medoid_indices)
     plot_embeddings(doc_embeddings_reduced, labels=initial_labels, medoids=medoid_embeddings,
-                title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap)
+                title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap,
+                cluster_colors=initial_colors)
 
     quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
     best_k, refined_medoid_indices, best_dbi = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)
@@ -609,6 +789,14 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     })
     cluster_mapping.to_csv(os.path.join(run_output_dir, "doc_clusters.csv"), index=False)
 
+    color_correspondence = track_cluster_correspondence(initial_labels, final_cluster_labels)
+    
+    correspondence_df = pd.DataFrame({
+        'final_cluster': list(color_correspondence.keys()),
+        'initial_cluster': list(color_correspondence.values())
+    })
+    correspondence_df.to_csv(os.path.join(run_output_dir, "cluster_correspondence.csv"), index=False)
+
     n_quantum_clusters = len(np.unique(final_cluster_labels))
     n_docs = len(doc_ids)
     
@@ -640,6 +828,15 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                                         where=row_sums != 0)
             
             np.save(os.path.join(run_output_dir, "quantum_probabilities.npy"), quantum_probs)
+            
+            create_hybrid_probabilistic_assignments(
+                doc_ids,
+                clustering.membership_probs,
+                final_cluster_labels,
+                refined_medoid_indices_of_embeddings,
+                run_output_dir,
+                prefix=clustering_method
+            )
     
     multi_membership_df = None
     if has_probabilities and multi_membership:
@@ -733,7 +930,9 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 refined_medoids=refined_medoid_embeddings,
                 title=final_plot_title,
                 save_path=final_clusters_plot_path,
-                cmap=cmap)
+                cmap=cmap,
+                cluster_colors=initial_colors,
+                color_correspondence=color_correspondence)
     
     if has_probabilities:
         spectrum_title = "Cluster Color Spectrum\n" + \
@@ -746,7 +945,9 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
             refined_medoids=refined_medoid_embeddings,
             title=spectrum_title,
             save_path=spectrum_plot_path,
-            cmap=cmap
+            cmap=cmap,
+            cluster_colors=initial_colors,
+            color_correspondence=color_correspondence
         )
         print(f"Saved cluster spectrum plot at: {spectrum_plot_path}")
 
@@ -779,6 +980,10 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         print(f"Cross-validation DBI: {cv_results['avg_dbi']:.4f} ± {cv_results['std_dbi']:.4f}")
         print(f"Cross-validation nDCG@10: {cv_results['avg_ndcg']:.4f} ± {cv_results['std_ndcg']:.4f}")
         print(f"Cross-validation Coverage: {cv_results.get('avg_coverage', 0.0):.4f} ± {cv_results.get('std_coverage', 0.0):.4f}")
+        
+        if 'avg_ndcg_multi' in cv_results and cv_results['avg_ndcg_multi'] > 0:
+            print(f"Cross-validation Multi-nDCG@10: {cv_results['avg_ndcg_multi']:.4f} ± {cv_results['std_ndcg_multi']:.4f}")
+            print(f"Cross-validation Multi-Coverage: {cv_results['avg_coverage_multi']:.4f} ± {cv_results['std_coverage_multi']:.4f}")
     
     print(f"All results saved to: {run_output_dir}")
     print("===============================")
