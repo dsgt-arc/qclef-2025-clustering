@@ -45,9 +45,9 @@ def ndcg_at_k(r, k):
     return dcg_at_k(r, k) / dcg_max
 
 def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assignments, 
-                      qrels_df, doc_ids, k=10, umap_reducer=None):
+                      qrels_df, doc_ids, k=10, umap_reducer=None, multi_cluster_assignments=None):
     """
-    Evaluate retrieval performance using nDCG@k and relevant coverage.
+    Evaluate retrieval performance using nDCG@k and relevant coverage, with multi-membership support.
     
     Args:
         query_embeddings: Embeddings of queries
@@ -58,9 +58,14 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         doc_ids: List of document IDs corresponding to doc_embeddings
         k: Cutoff for nDCG calculation (default: 10)
         umap_reducer: UMAP reducer to reduce query embeddings to same dimension as centroids
+        multi_cluster_assignments: DataFrame with multi-membership assignments (if using multi-membership)
     
     Returns:
-        Dictionary with 'ndcg': Average nDCG@k across all queries and 'coverage': Average relevant coverage
+        Dictionary with:
+        - 'ndcg': Average nDCG@k across all queries (hard assignment)
+        - 'coverage': Average relevant coverage (hard assignment)
+        - 'ndcg_multi': Average nDCG@k with multi-membership assignments (if applicable)
+        - 'coverage_multi': Average relevant coverage with multi-membership (if applicable)
     """
     doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(doc_ids)}
     
@@ -75,6 +80,10 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
     
     ndcg_scores = []
     coverage_scores = []
+    
+    ndcg_multi_scores = []
+    coverage_multi_scores = []
+    has_multi = multi_cluster_assignments is not None
     
     query_ids = qrels_df['query_id'].unique()
     
@@ -100,6 +109,9 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         if len(cluster_docs_idx) == 0:
             ndcg_scores.append(0.0)
             coverage_scores.append(0.0)
+            if has_multi:
+                ndcg_multi_scores.append(0.0)
+                coverage_multi_scores.append(0.0)
             continue
         
         cluster_doc_ids = [doc_ids[idx] for idx in cluster_docs_idx]
@@ -132,17 +144,68 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         ndcg = ndcg_at_k(relevance_scores, k)
         ndcg_scores.append(ndcg)
         
+        if has_multi:
+            multi_docs_idx = []
+            for doc_idx, row in enumerate(multi_cluster_assignments.iloc):
+                if closest_centroid_idx in row['multi_membership']:
+                    multi_docs_idx.append(doc_idx)
+            
+            if len(multi_docs_idx) == 0:
+                ndcg_multi_scores.append(0.0)
+                coverage_multi_scores.append(0.0)
+                continue
+            
+            multi_doc_ids = [doc_ids[idx] for idx in multi_docs_idx]
+            
+            multi_retrieved_relevant = relevant_doc_ids.intersection(set(multi_doc_ids))
+            multi_coverage = len(multi_retrieved_relevant) / len(relevant_doc_ids) if relevant_doc_ids else 0.0
+            coverage_multi_scores.append(multi_coverage)
+            
+            multi_doc_embeddings = doc_embeddings_norm[multi_docs_idx]
+            
+            if umap_reducer is not None:
+                multi_doc_similarities = np.dot(query_embedding, multi_doc_embeddings.T)[0]
+            else:
+                orig_query = normalize(query_embeddings[q_idx].reshape(1, -1))
+                orig_multi_docs = normalize(doc_embeddings[multi_docs_idx])
+                multi_doc_similarities = np.dot(orig_query, orig_multi_docs.T)[0]
+            
+            multi_sorted_indices = np.argsort(-multi_doc_similarities)
+            multi_ranked_indices = [multi_docs_idx[idx] for idx in multi_sorted_indices]
+            multi_ranked_doc_ids = [doc_ids[idx] for idx in multi_ranked_indices]
+            
+            multi_relevance_scores = []
+            for doc_id in multi_ranked_doc_ids[:k]:
+                rel_values = query_qrels[query_qrels['doc_id'] == doc_id]['relevance'].values
+                if len(rel_values) > 0:
+                    multi_relevance_scores.append(float(rel_values[0]))
+                else:
+                    multi_relevance_scores.append(0.0)
+            
+            ndcg_multi = ndcg_at_k(multi_relevance_scores, k)
+            ndcg_multi_scores.append(ndcg_multi)
+        
         if q_idx < 5:
             judged_docs_found = len(set(cluster_doc_ids).intersection(judged_doc_ids))
             total_judged = len(judged_doc_ids)
             print(f"Query {query_id}: Found {judged_docs_found}/{total_judged} judged docs, "
                   f"{len(retrieved_relevant)}/{len(relevant_doc_ids)} relevant docs in cluster {closest_centroid_idx}, "
                   f"nDCG@{k}: {ndcg:.4f}, Coverage: {coverage:.4f}")
+            
+            if has_multi:
+                multi_judged_found = len(set(multi_doc_ids).intersection(judged_doc_ids))
+                print(f"  Multi-Membership: Found {multi_judged_found}/{total_judged} judged docs, "
+                      f"{len(multi_retrieved_relevant)}/{len(relevant_doc_ids)} relevant docs, "
+                      f"nDCG@{k}: {ndcg_multi:.4f}, Coverage: {multi_coverage:.4f}")
     
     results = {
         'ndcg': np.mean(ndcg_scores) if ndcg_scores else 0.0,
         'coverage': np.mean(coverage_scores) if coverage_scores else 0.0
     }
+    
+    if has_multi:
+        results['ndcg_multi'] = np.mean(ndcg_multi_scores) if ndcg_multi_scores else 0.0
+        results['coverage_multi'] = np.mean(coverage_multi_scores) if coverage_multi_scores else 0.0
     
     return results
 
@@ -366,7 +429,7 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     n_docs = len(doc_ids)
     
     quantum_probs = np.zeros((n_docs, n_quantum_clusters))
-    
+
     if has_probabilities:
         if hasattr(clustering, 'membership_probs'):
             component_to_quantum = {}
@@ -386,26 +449,17 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
                 
                 for comp_idx, quantum_idx in component_to_quantum.items():
                     quantum_probs[doc_idx, quantum_idx] += doc_probs[comp_idx]
-    else:
-        print("Calculating distance-based probabilities for visualization...")
-        refined_medoid_embeddings_full = np.vstack([refined_medoid_embeddings[i] for i in range(len(refined_medoid_embeddings))])
-        
-        distances = pairwise_distances(doc_embeddings_reduced, refined_medoid_embeddings_full)
-        
-        max_distance = np.max(distances)
-        sim_scores = np.exp(-(distances / max_distance))
-        
-        row_sums = sim_scores.sum(axis=1, keepdims=True)
-        quantum_probs = sim_scores / row_sums
+                    
+            row_sums = quantum_probs.sum(axis=1, keepdims=True)
+            quantum_probs = np.divide(quantum_probs, row_sums, 
+                                        out=np.zeros_like(quantum_probs), 
+                                        where=row_sums != 0)
+            
+            np.save(os.path.join(run_output_dir, "quantum_probabilities.npy"), quantum_probs)
     
-    row_sums = quantum_probs.sum(axis=1, keepdims=True)
-    quantum_probs = np.divide(quantum_probs, row_sums, 
-                            out=np.zeros_like(quantum_probs), 
-                            where=row_sums != 0)
-    
-    np.save(os.path.join(run_output_dir, "quantum_probabilities.npy"), quantum_probs)
-    
+    multi_membership_df = None
     if has_probabilities and multi_membership:
+        print(f"Creating multi-membership assignments with threshold={threshold}...")
         multi_membership_df = create_multi_membership_assignments(
             doc_ids,
             doc_embeddings_reduced,
@@ -453,7 +507,8 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
                     qrels_df,
                     doc_ids,
                     k=10,
-                    umap_reducer=umap_reducer
+                    umap_reducer=umap_reducer,
+                    multi_cluster_assignments=multi_membership_df if multi_membership else None
                 )
                 
                 ndcg_10 = evaluation_results['ndcg']
@@ -464,6 +519,14 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
                 
                 run_info['results']['ndcg_10'] = float(ndcg_10)
                 run_info['results']['relevant_coverage'] = float(coverage)
+                
+                if 'ndcg_multi' in evaluation_results:
+                    ndcg_multi = evaluation_results['ndcg_multi']
+                    coverage_multi = evaluation_results['coverage_multi']
+                    print(f"Full dataset Multi-Membership nDCG@10: {ndcg_multi:.4f}")
+                    print(f"Full dataset Multi-Membership Coverage: {coverage_multi:.4f}")
+                    run_info['results']['ndcg_multi_10'] = float(ndcg_multi)
+                    run_info['results']['coverage_multi'] = float(coverage_multi)
             else:
                 print("No valid queries with consistent embedding dimensions found.")
                 run_info['results']['ndcg_10'] = 0.0
@@ -478,7 +541,7 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
         run_info['results']['relevant_coverage'] = 0.0
 
     final_plot_title = "Final Quantum Cluster Assignments\n" + \
-                      f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
+                    f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
     
     plot_embeddings(doc_embeddings_reduced,
                 labels=final_cluster_labels,
@@ -488,21 +551,22 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
                 save_path=final_clusters_plot_path,
                 cmap=cmap)
     
-    spectrum_title = "Cluster Color Spectrum\n" + \
-                    f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
-    
-    plot_cluster_spectrum(
-        doc_embeddings_reduced,
-        quantum_probs,
-        medoids=medoid_embeddings,
-        refined_medoids=refined_medoid_embeddings,
-        title=spectrum_title,
-        save_path=spectrum_plot_path,
-        cmap=cmap
-    )
+    if has_probabilities:
+        spectrum_title = "Cluster Color Spectrum\n" + \
+                        f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
+        
+        plot_cluster_spectrum(
+            doc_embeddings_reduced,
+            quantum_probs,
+            medoids=medoid_embeddings,
+            refined_medoids=refined_medoid_embeddings,
+            title=spectrum_title,
+            save_path=spectrum_plot_path,
+            cmap=cmap
+        )
+        print(f"Saved cluster spectrum plot at: {spectrum_plot_path}")
 
     print(f"Saved final quantum cluster plot at: {final_clusters_plot_path}")
-    print(f"Saved cluster spectrum plot at: {spectrum_plot_path}")
     
     run_info_path = os.path.join(run_output_dir, f"run_info_{timestamp}.json")
     with open(run_info_path, 'w') as f:
@@ -520,6 +584,9 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     print(f"Final Clusters: {run_info['results']['final_clusters']}, DBI: {run_info['results']['final_dbi']:.4f}")
     print(f"nDCG@10: {run_info['results']['ndcg_10']:.4f}, Relevant Coverage: {run_info['results']['relevant_coverage']:.4f}")
     if multi_membership and has_probabilities:
+        if 'ndcg_multi_10' in run_info['results'] and 'coverage_multi' in run_info['results']:
+            print(f"Multi-Membership nDCG@10: {run_info['results']['ndcg_multi_10']:.4f}")
+            print(f"Multi-Membership Coverage: {run_info['results']['coverage_multi']:.4f}")
         mm_stats = run_info['results']['multi_membership']
         print(f"Multi-Membership: {mm_stats['percent_multi']:.1f}% of documents belong to multiple clusters")
         print(f"Average memberships per document: {mm_stats['avg_memberships']:.2f}")

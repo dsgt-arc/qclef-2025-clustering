@@ -77,9 +77,9 @@ def ndcg_at_k(r, k):
 
 
 def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assignments, 
-                        qrels_df, doc_ids, k=10, umap_reducer=None):
+                        qrels_df, doc_ids, k=10, umap_reducer=None, multi_cluster_assignments=None):
     """
-    Evaluate retrieval performance using nDCG@k.
+    Evaluate retrieval performance using nDCG@k and relevant coverage, with multi-membership support.
     
     Args:
         query_embeddings: Embeddings of queries
@@ -90,9 +90,14 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         doc_ids: List of document IDs corresponding to doc_embeddings
         k: Cutoff for nDCG calculation (default: 10)
         umap_reducer: UMAP reducer to reduce query embeddings to same dimension as centroids
+        multi_cluster_assignments: DataFrame with multi-membership assignments (if using multi-membership)
     
     Returns:
-        Average nDCG@k across all queries
+        Dictionary with:
+        - 'ndcg': Average nDCG@k across all queries (hard assignment)
+        - 'coverage': Average relevant coverage (hard assignment)
+        - 'ndcg_multi': Average nDCG@k with multi-membership assignments (if applicable)
+        - 'coverage_multi': Average relevant coverage with multi-membership (if applicable)
     """
     doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(doc_ids)}
     
@@ -106,6 +111,11 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
     doc_embeddings_norm = normalize(doc_embeddings)
     
     ndcg_scores = []
+    coverage_scores = []
+    
+    ndcg_multi_scores = []
+    coverage_multi_scores = []
+    has_multi = multi_cluster_assignments is not None
     
     query_ids = qrels_df['query_id'].unique()
     
@@ -116,7 +126,11 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
             continue
         
         judged_doc_ids = set(query_qrels['doc_id'].values)
+        relevant_doc_ids = set(query_qrels[query_qrels['relevance'] > 0]['doc_id'].values)
         
+        if not relevant_doc_ids:
+            continue
+            
         query_embedding = query_embeddings_norm[q_idx].reshape(1, -1)
         
         centroid_similarities = np.dot(query_embedding, centroids_norm.T)[0]
@@ -126,49 +140,106 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         
         if len(cluster_docs_idx) == 0:
             ndcg_scores.append(0.0)
+            coverage_scores.append(0.0)
+            if has_multi:
+                ndcg_multi_scores.append(0.0)
+                coverage_multi_scores.append(0.0)
             continue
         
         cluster_doc_ids = [doc_ids[idx] for idx in cluster_docs_idx]
         
-        judged_cluster_docs = set(cluster_doc_ids).intersection(judged_doc_ids)
+        retrieved_relevant = relevant_doc_ids.intersection(set(cluster_doc_ids))
+        coverage = len(retrieved_relevant) / len(relevant_doc_ids) if relevant_doc_ids else 0.0
+        coverage_scores.append(coverage)
         
-        if not judged_cluster_docs:
-            ndcg_scores.append(0.0)
-            continue
-        
-        judged_cluster_indices = [idx for idx in cluster_docs_idx if doc_ids[idx] in judged_cluster_docs]
-        
-        if not judged_cluster_indices:
-            ndcg_scores.append(0.0)
-            continue
-        
-        cluster_doc_embeddings = doc_embeddings_norm[judged_cluster_indices]
+        cluster_doc_embeddings = doc_embeddings_norm[cluster_docs_idx]
         
         if umap_reducer is not None:
             doc_similarities = np.dot(query_embedding, cluster_doc_embeddings.T)[0]
         else:
             orig_query = normalize(query_embeddings[q_idx].reshape(1, -1))
-            orig_docs = normalize(doc_embeddings[judged_cluster_indices])
+            orig_docs = normalize(doc_embeddings[cluster_docs_idx])
             doc_similarities = np.dot(orig_query, orig_docs.T)[0]
         
         sorted_indices = np.argsort(-doc_similarities)
-        judged_ranked_doc_indices = [judged_cluster_indices[idx] for idx in sorted_indices]
-        ranked_doc_ids = [doc_ids[idx] for idx in judged_ranked_doc_indices]
+        ranked_cluster_indices = [cluster_docs_idx[idx] for idx in sorted_indices]
+        ranked_doc_ids = [doc_ids[idx] for idx in ranked_cluster_indices]
         
         relevance_scores = []
         for doc_id in ranked_doc_ids[:k]:
-            rel = query_qrels[query_qrels['doc_id'] == doc_id]['relevance'].values
-            relevance_scores.append(float(rel[0]) if len(rel) > 0 else 0.0)
+            rel_values = query_qrels[query_qrels['doc_id'] == doc_id]['relevance'].values
+            if len(rel_values) > 0:
+                relevance_scores.append(float(rel_values[0]))
+            else:
+                relevance_scores.append(0.0)
         
         ndcg = ndcg_at_k(relevance_scores, k)
         ndcg_scores.append(ndcg)
         
+        if has_multi:
+            multi_docs_idx = []
+            for doc_idx, row in enumerate(multi_cluster_assignments.iloc):
+                if closest_centroid_idx in row['multi_membership']:
+                    multi_docs_idx.append(doc_idx)
+            
+            if len(multi_docs_idx) == 0:
+                ndcg_multi_scores.append(0.0)
+                coverage_multi_scores.append(0.0)
+                continue
+            
+            multi_doc_ids = [doc_ids[idx] for idx in multi_docs_idx]
+            
+            multi_retrieved_relevant = relevant_doc_ids.intersection(set(multi_doc_ids))
+            multi_coverage = len(multi_retrieved_relevant) / len(relevant_doc_ids) if relevant_doc_ids else 0.0
+            coverage_multi_scores.append(multi_coverage)
+            
+            multi_doc_embeddings = doc_embeddings_norm[multi_docs_idx]
+            
+            if umap_reducer is not None:
+                multi_doc_similarities = np.dot(query_embedding, multi_doc_embeddings.T)[0]
+            else:
+                orig_query = normalize(query_embeddings[q_idx].reshape(1, -1))
+                orig_multi_docs = normalize(doc_embeddings[multi_docs_idx])
+                multi_doc_similarities = np.dot(orig_query, orig_multi_docs.T)[0]
+            
+            multi_sorted_indices = np.argsort(-multi_doc_similarities)
+            multi_ranked_indices = [multi_docs_idx[idx] for idx in multi_sorted_indices]
+            multi_ranked_doc_ids = [doc_ids[idx] for idx in multi_ranked_indices]
+            
+            multi_relevance_scores = []
+            for doc_id in multi_ranked_doc_ids[:k]:
+                rel_values = query_qrels[query_qrels['doc_id'] == doc_id]['relevance'].values
+                if len(rel_values) > 0:
+                    multi_relevance_scores.append(float(rel_values[0]))
+                else:
+                    multi_relevance_scores.append(0.0)
+            
+            ndcg_multi = ndcg_at_k(multi_relevance_scores, k)
+            ndcg_multi_scores.append(ndcg_multi)
+        
         if q_idx < 5:
-            judged_docs_found = len(judged_cluster_docs)
+            judged_docs_found = len(set(cluster_doc_ids).intersection(judged_doc_ids))
             total_judged = len(judged_doc_ids)
-            print(f"Query {query_id}: Found {judged_docs_found}/{total_judged} judged docs in cluster {closest_centroid_idx}, nDCG@{k}: {ndcg:.4f}")
+            print(f"Query {query_id}: Found {judged_docs_found}/{total_judged} judged docs, "
+                  f"{len(retrieved_relevant)}/{len(relevant_doc_ids)} relevant docs in cluster {closest_centroid_idx}, "
+                  f"nDCG@{k}: {ndcg:.4f}, Coverage: {coverage:.4f}")
+            
+            if has_multi:
+                multi_judged_found = len(set(multi_doc_ids).intersection(judged_doc_ids))
+                print(f"  Multi-Membership: Found {multi_judged_found}/{total_judged} judged docs, "
+                      f"{len(multi_retrieved_relevant)}/{len(relevant_doc_ids)} relevant docs, "
+                      f"nDCG@{k}: {ndcg_multi:.4f}, Coverage: {multi_coverage:.4f}")
     
-    return np.mean(ndcg_scores) if ndcg_scores else 0.0
+    results = {
+        'ndcg': np.mean(ndcg_scores) if ndcg_scores else 0.0,
+        'coverage': np.mean(coverage_scores) if coverage_scores else 0.0
+    }
+    
+    if has_multi:
+        results['ndcg_multi'] = np.mean(ndcg_multi_scores) if ndcg_multi_scores else 0.0
+        results['coverage_multi'] = np.mean(coverage_multi_scores) if coverage_multi_scores else 0.0
+    
+    return results
 
 
 def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, doc_ids, 
@@ -194,10 +265,21 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
     
     dbi_scores = []
     ndcg_scores = []
+    coverage_scores = []
     
-    query_df['query_embeddings'] = [np.fromstring(vec[1:-1], dtype=float, sep=',') for vec in query_df['query_embeddings']]
-    query_embeddings = np.stack(query_df["query_embeddings"].values)
-    qrels_df = query_df[['query_id', 'doc_id', 'relevance']]
+    query_df['query_embeddings'] = query_df['query_embeddings'].apply(
+        lambda x: np.fromstring(x[1:-1], dtype=float, sep=',') if isinstance(x, str) else x
+    )
+    
+    valid_queries = query_df[query_df['query_embeddings'].apply(lambda x: isinstance(x, np.ndarray) and len(x) > 0)]
+    
+    if len(valid_queries) > 0:
+        first_shape = len(valid_queries['query_embeddings'].iloc[0])
+        valid_queries = valid_queries[valid_queries['query_embeddings'].apply(lambda x: len(x) == first_shape)]
+        
+        if len(valid_queries) > 0:
+            query_embeddings = np.stack(valid_queries["query_embeddings"].values)
+            qrels_df = valid_queries[['query_id', 'doc_id', 'relevance']]
     
     for fold, (train_idx, test_idx) in enumerate(cv.split(doc_embeddings_reduced)):
         print(f"\nFold {fold+1}/{cv_folds}")
@@ -230,7 +312,8 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
         _, refined_medoid_indices, train_dbi = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)
         
         if refined_medoid_indices is not None:
-            refined_medoid_embeddings = medoid_embeddings[refined_medoid_indices]
+            refined_medoid_indices_of_embeddings = medoid_indices[refined_medoid_indices]
+            refined_medoid_embeddings = X_train[refined_medoid_indices_of_embeddings]
             
             distances = pairwise_distances(X_test, refined_medoid_embeddings)
             test_labels = np.argmin(distances, axis=1)
@@ -244,7 +327,7 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
             test_qrels = qrels_df[qrels_df['doc_id'].isin(test_doc_ids)]
             
             if not test_qrels.empty:
-                test_ndcg = evaluate_retrieval(
+                eval_results = evaluate_retrieval(
                     query_embeddings,
                     X_test,
                     refined_medoid_embeddings,
@@ -254,8 +337,11 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
                     k=10,
                     umap_reducer=umap_reducer
                 )
-                ndcg_scores.append(test_ndcg)
-                print(f"Test DBI: {test_dbi:.4f}, Test nDCG@10: {test_ndcg:.4f}")
+                
+                ndcg_scores.append(eval_results['ndcg'])
+                coverage_scores.append(eval_results['coverage'])
+                
+                print(f"Test DBI: {test_dbi:.4f}, Test nDCG@10: {eval_results['ndcg']:.4f}, Coverage: {eval_results['coverage']:.4f}")
             else:
                 print(f"Test DBI: {test_dbi:.4f}, No relevant queries found for test documents")
         else:
@@ -279,13 +365,24 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
         std_ndcg = 0
         print("Warning: No valid nDCG scores computed")
     
+    if coverage_scores:
+        avg_cov = np.mean(coverage_scores)
+        std_cov = np.std(coverage_scores)
+        print(f"Average Coverage across {cv_folds} folds: {avg_cov:.4f} ± {std_cov:.4f}")
+    else:
+        avg_cov = 0
+        std_cov = 0
+    
     cv_results = {
         'dbi_scores': dbi_scores,
         'ndcg_scores': ndcg_scores,
+        'coverage_scores': coverage_scores,
         'avg_dbi': avg_dbi,
         'std_dbi': std_dbi,
         'avg_ndcg': avg_ndcg,
-        'std_ndcg': std_ndcg
+        'std_ndcg': std_ndcg,
+        'avg_coverage': avg_cov,
+        'std_coverage': std_cov
     }
     
     print("=== Cross-Validation Evaluation Complete ===")
@@ -339,9 +436,10 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     colormaps_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "colormaps"))
     output_csv = os.path.join(data_dir, "antique_doc_embeddings.csv")
     query_csv = os.path.join(data_dir, "antique_train_queries.csv")
-
-    # Create a run-specific output directory
-    run_output_dir = os.path.join(data_dir, f"run_{timestamp}_{clustering_method}_cv")
+    
+    run_output_dir = os.path.join(data_dir, f"run_{timestamp}_{clustering_method}")
+    if run_cv:
+        run_output_dir += "_cv"
     os.makedirs(run_output_dir, exist_ok=True)
     
     umap_plot_path = os.path.join(run_output_dir, f"umap_plot_{timestamp}.png")
@@ -362,7 +460,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     doc_ids = train_df['doc_id'].tolist()
 
     query_df = pd.read_csv(query_csv)
-    
+
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
     np.save(os.path.join(run_output_dir, "doc_embeddings_reduced.npy"), doc_embeddings_reduced)
@@ -375,7 +473,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         print(f"Warning: Multi-membership requires 'gmm' or 'hdbscan-gmm' method. Requested method '{clustering_method}' doesn't provide probabilities.")
         multi_membership = False
         run_info['multi_membership'] = False
-
+    
     # Run cross-validation if requested
     cv_results = None
     if run_cv:
@@ -392,7 +490,6 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         np.save(os.path.join(run_output_dir, "cv_results.npy"), cv_results)
         run_info['cv_results'] = cv_results
     
-    # Choose the appropriate clustering method
     if clustering_method == 'hdbscan':
         print("Using HDBSCAN clustering...")
         clustering = HDBSCANClustering(**config.hdbscan_clustering)
@@ -479,7 +576,6 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     plot_embeddings(doc_embeddings_reduced, labels=initial_labels, medoids=medoid_embeddings,
                 title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap)
 
-    # Quantum refinement
     quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
     best_k, refined_medoid_indices, best_dbi = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)
 
@@ -513,17 +609,13 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     })
     cluster_mapping.to_csv(os.path.join(run_output_dir, "doc_clusters.csv"), index=False)
 
-    # Calculate probabilities for visual representation
     n_quantum_clusters = len(np.unique(final_cluster_labels))
     n_docs = len(doc_ids)
     
-    # Create quantum probabilities matrix
     quantum_probs = np.zeros((n_docs, n_quantum_clusters))
-    
+
     if has_probabilities:
-        # If we have probabilistic clustering, use those probabilities
         if hasattr(clustering, 'membership_probs'):
-            # Map original probabilities to quantum clusters
             component_to_quantum = {}
             
             for comp_idx in range(clustering.membership_probs.shape[1]):
@@ -541,33 +633,17 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 
                 for comp_idx, quantum_idx in component_to_quantum.items():
                     quantum_probs[doc_idx, quantum_idx] += doc_probs[comp_idx]
-    else:
-        # If not, calculate distance-based probabilities for all methods
-        print("Calculating distance-based probabilities for visualization...")
-        refined_medoid_embeddings_full = np.vstack([refined_medoid_embeddings[i] for i in range(len(refined_medoid_embeddings))])
-        
-        # Calculate distances from each document to each medoid
-        distances = pairwise_distances(doc_embeddings_reduced, refined_medoid_embeddings_full)
-        
-        # Convert distances to probabilities using softmax
-        max_distance = np.max(distances)
-        sim_scores = np.exp(-(distances / max_distance))
-        
-        # Normalize to get probabilities
-        row_sums = sim_scores.sum(axis=1, keepdims=True)
-        quantum_probs = sim_scores / row_sums
+                    
+            row_sums = quantum_probs.sum(axis=1, keepdims=True)
+            quantum_probs = np.divide(quantum_probs, row_sums, 
+                                        out=np.zeros_like(quantum_probs), 
+                                        where=row_sums != 0)
+            
+            np.save(os.path.join(run_output_dir, "quantum_probabilities.npy"), quantum_probs)
     
-    # Normalize probabilities to sum to 1
-    row_sums = quantum_probs.sum(axis=1, keepdims=True)
-    quantum_probs = np.divide(quantum_probs, row_sums, 
-                            out=np.zeros_like(quantum_probs), 
-                            where=row_sums != 0)
-    
-    # Save the quantum probabilities
-    np.save(os.path.join(run_output_dir, "quantum_probabilities.npy"), quantum_probs)
-    
-    # Create multi-membership assignments if requested and available
+    multi_membership_df = None
     if has_probabilities and multi_membership:
+        print(f"Creating multi-membership assignments with threshold={threshold}...")
         multi_membership_df = create_multi_membership_assignments(
             doc_ids,
             doc_embeddings_reduced,
@@ -591,8 +667,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     print(f"Final Quantum-Refined Medoid Embeddings:\n {refined_medoid_embeddings}")
     print(f"Unique Cluster Assignments: {np.unique(final_cluster_labels)}")
 
-    # Evaluate nDCG@10 on full dataset
-    print("\nEvaluating nDCG@10 on full dataset...")
+    print("\nEvaluating retrieval metrics on full dataset...")
     try:
         query_df['query_embeddings'] = query_df['query_embeddings'].apply(
             lambda x: np.fromstring(x[1:-1], dtype=float, sep=',') if isinstance(x, str) else x
@@ -608,7 +683,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 query_embeddings = np.stack(valid_queries["query_embeddings"].values)
                 qrels_df = valid_queries[['query_id', 'doc_id', 'relevance']]
                 
-                ndcg_10 = evaluate_retrieval(
+                evaluation_results = evaluate_retrieval(
                     query_embeddings,
                     doc_embeddings_reduced,
                     refined_medoid_embeddings,
@@ -616,26 +691,41 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                     qrels_df,
                     doc_ids,
                     k=10,
-                    umap_reducer=umap_reducer
+                    umap_reducer=umap_reducer,
+                    multi_cluster_assignments=multi_membership_df if multi_membership else None
                 )
+                
+                ndcg_10 = evaluation_results['ndcg']
+                coverage = evaluation_results['coverage']
+                
                 print(f"Full dataset nDCG@10: {ndcg_10:.4f}")
+                print(f"Full dataset Relevant Coverage: {coverage:.4f}")
+                
                 run_info['results']['ndcg_10'] = float(ndcg_10)
+                run_info['results']['relevant_coverage'] = float(coverage)
+                
+                if 'ndcg_multi' in evaluation_results:
+                    ndcg_multi = evaluation_results['ndcg_multi']
+                    coverage_multi = evaluation_results['coverage_multi']
+                    print(f"Full dataset Multi-Membership nDCG@10: {ndcg_multi:.4f}")
+                    print(f"Full dataset Multi-Membership Coverage: {coverage_multi:.4f}")
+                    run_info['results']['ndcg_multi_10'] = float(ndcg_multi)
+                    run_info['results']['coverage_multi'] = float(coverage_multi)
             else:
                 print("No valid queries with consistent embedding dimensions found.")
-                ndcg_10 = 0.0
                 run_info['results']['ndcg_10'] = 0.0
+                run_info['results']['relevant_coverage'] = 0.0
         else:
             print("No valid query embeddings found.")
-            ndcg_10 = 0.0
             run_info['results']['ndcg_10'] = 0.0
+            run_info['results']['relevant_coverage'] = 0.0
     except Exception as e:
-        print(f"Error evaluating nDCG@10 on full dataset: {str(e)}")
-        ndcg_10 = 0.0
+        print(f"Error evaluating retrieval metrics on full dataset: {str(e)}")
         run_info['results']['ndcg_10'] = 0.0
+        run_info['results']['relevant_coverage'] = 0.0
 
-    # Create the final plots
     final_plot_title = "Final Quantum Cluster Assignments\n" + \
-                      f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
+                    f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
     
     plot_embeddings(doc_embeddings_reduced,
                 labels=final_cluster_labels,
@@ -645,42 +735,42 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 save_path=final_clusters_plot_path,
                 cmap=cmap)
     
-    # Create the cluster spectrum visualization
-    spectrum_title = "Cluster Color Spectrum\n" + \
-                    f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
-    
-    plot_cluster_spectrum(
-        doc_embeddings_reduced,
-        quantum_probs,
-        medoids=medoid_embeddings,
-        refined_medoids=refined_medoid_embeddings,
-        title=spectrum_title,
-        save_path=spectrum_plot_path,
-        cmap=cmap
-    )
+    if has_probabilities:
+        spectrum_title = "Cluster Color Spectrum\n" + \
+                        f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
+        
+        plot_cluster_spectrum(
+            doc_embeddings_reduced,
+            quantum_probs,
+            medoids=medoid_embeddings,
+            refined_medoids=refined_medoid_embeddings,
+            title=spectrum_title,
+            save_path=spectrum_plot_path,
+            cmap=cmap
+        )
+        print(f"Saved cluster spectrum plot at: {spectrum_plot_path}")
 
     print(f"Saved final quantum cluster plot at: {final_clusters_plot_path}")
-    print(f"Saved cluster spectrum plot at: {spectrum_plot_path}")
     
-    # Save run information
     run_info_path = os.path.join(run_output_dir, f"run_info_{timestamp}.json")
     with open(run_info_path, 'w') as f:
         json.dump(run_info, f, indent=2)
     print(f"Saved run information to {run_info_path}")
     
-    summary_path = os.path.join(data_dir, f"run_summary_{clustering_method}_cv_{timestamp}.json")
+    summary_path = os.path.join(data_dir, f"run_summary_{clustering_method}_{timestamp}.json")
     with open(summary_path, 'w') as f:
         json.dump(run_info, f, indent=2)
     
-    # Print summary information
-    print("\n=== Clustering Evaluation Summary ===")
+    print("\n=== Clustering Run Summary ===")
     print(f"Timestamp: {timestamp}")
     print(f"Method: {clustering_method}" + (" with Multi-Membership" if multi_membership else ""))
     print(f"Initial Clusters: {run_info['results']['initial_clusters']}, DBI: {run_info['results']['initial_dbi']:.4f}")
     print(f"Final Clusters: {run_info['results']['final_clusters']}, DBI: {run_info['results']['final_dbi']:.4f}")
-    print(f"Full dataset nDCG@10: {ndcg_10:.4f}")
-    
+    print(f"nDCG@10: {run_info['results']['ndcg_10']:.4f}, Relevant Coverage: {run_info['results'].get('relevant_coverage', 0.0):.4f}")
     if multi_membership and has_probabilities:
+        if 'ndcg_multi_10' in run_info['results'] and 'coverage_multi' in run_info['results']:
+            print(f"Multi-Membership nDCG@10: {run_info['results']['ndcg_multi_10']:.4f}")
+            print(f"Multi-Membership Coverage: {run_info['results']['coverage_multi']:.4f}")
         mm_stats = run_info['results']['multi_membership']
         print(f"Multi-Membership: {mm_stats['percent_multi']:.1f}% of documents belong to multiple clusters")
         print(f"Average memberships per document: {mm_stats['avg_memberships']:.2f}")
@@ -688,6 +778,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     if cv_results:
         print(f"Cross-validation DBI: {cv_results['avg_dbi']:.4f} ± {cv_results['std_dbi']:.4f}")
         print(f"Cross-validation nDCG@10: {cv_results['avg_ndcg']:.4f} ± {cv_results['std_ndcg']:.4f}")
+        print(f"Cross-validation Coverage: {cv_results.get('avg_coverage', 0.0):.4f} ± {cv_results.get('std_coverage', 0.0):.4f}")
     
     print(f"All results saved to: {run_output_dir}")
     print("===============================")
@@ -728,10 +819,10 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print("HDBSCAN config not found, using default parameters")
         config.hdbscan_clustering = ConfigBox({
-            'min_cluster_size': 5,
-            'min_samples': None,
-            'cluster_selection_method': 'eom',
-            'cluster_selection_epsilon': 0.0,
+            'min_cluster_size': 20,
+            'min_samples': 25,
+            'cluster_selection_method': 'leaf',
+            'cluster_selection_epsilon': 0.2,
             'metric': 'euclidean',
             'random_state': config.classical_clustering.random_state
         })
