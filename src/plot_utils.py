@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import LinearSegmentedColormap
+from collections import defaultdict
 
 def load_colormap(colormap_name, colormaps_dir=None):
     """
@@ -21,8 +22,53 @@ def load_colormap(colormap_name, colormaps_dir=None):
     else:
         return plt.get_cmap(colormap_name)
 
+def generate_cluster_colors(n_clusters, cmap='Spectral'):
+    """
+    Generate a fixed set of colors for clusters.
+    
+    Args:
+        n_clusters: Number of clusters
+        cmap: Colormap to use
+        
+    Returns:
+        Array of RGBA colors for each cluster
+    """
+    if isinstance(cmap, str):
+        cmap = plt.get_cmap(cmap)
+    
+    return cmap(np.linspace(0, 1, n_clusters))
+
+def track_cluster_correspondence(initial_labels, final_labels):
+    """
+    Track how clusters change between initial and final clustering.
+    
+    Args:
+        initial_labels: Cluster labels from initial clustering
+        final_labels: Cluster labels after refinement
+        
+    Returns:
+        Dictionary mapping final cluster IDs to most corresponding initial cluster IDs
+    """
+    correspondence = {}
+    
+    overlap_counts = defaultdict(lambda: defaultdict(int))
+    
+    for i, (init_label, final_label) in enumerate(zip(initial_labels, final_labels)):
+        overlap_counts[final_label][init_label] += 1
+    
+    for final_cluster in np.unique(final_labels):
+        if len(overlap_counts[final_cluster]) > 0:
+            init_cluster = max(overlap_counts[final_cluster].items(), 
+                              key=lambda x: x[1])[0]
+            correspondence[final_cluster] = init_cluster
+        else:
+            correspondence[final_cluster] = final_cluster
+    
+    return correspondence
+
 def plot_embeddings(embeddings, labels=None, medoids=None, refined_medoids=None, 
-                   title="UMAP Embedding", save_path=None, cmap='Spectral'):
+                   title="UMAP Embedding", save_path=None, cmap='Spectral',
+                   cluster_colors=None, color_correspondence=None):
     """
     Plot embeddings in 2D with optional cluster labels and medoids.
     
@@ -34,6 +80,8 @@ def plot_embeddings(embeddings, labels=None, medoids=None, refined_medoids=None,
         title: Plot title
         save_path: Path to save the plot
         cmap: Colormap (as string or colormap object)
+        cluster_colors: Optional dictionary mapping cluster IDs to colors
+        color_correspondence: Optional dictionary mapping refined cluster IDs to original IDs
     """
     fig, ax = plt.subplots(figsize=(10, 8))
     
@@ -54,17 +102,37 @@ def plot_embeddings(embeddings, labels=None, medoids=None, refined_medoids=None,
         unique_labels = np.unique(labels)
         n_clusters = len(unique_labels)
         
-        scatter = ax.scatter(
-            embeddings[:, 0], 
-            embeddings[:, 1], 
-            c=labels, 
-            cmap=cmap, 
-            s=20, 
-            alpha=0.8,
-            edgecolors='k',
-            linewidth=0.3
-        )
-        
+        if cluster_colors is not None and color_correspondence is not None:
+            point_colors = np.zeros((len(labels), 4))
+            for i, label in enumerate(labels):
+                orig_label = color_correspondence.get(label, label)
+                if orig_label in cluster_colors:
+                    point_colors[i] = cluster_colors[orig_label]
+                else:
+                    normalized_label = np.where(unique_labels == label)[0][0] / max(1, n_clusters - 1)
+                    point_colors[i] = cmap(normalized_label)
+            
+            scatter = ax.scatter(
+                embeddings[:, 0], 
+                embeddings[:, 1], 
+                c=point_colors, 
+                s=20, 
+                alpha=0.8,
+                edgecolors='k',
+                linewidth=0.3
+            )
+        else:
+            scatter = ax.scatter(
+                embeddings[:, 0], 
+                embeddings[:, 1], 
+                c=labels, 
+                cmap=cmap, 
+                s=20, 
+                alpha=0.8,
+                edgecolors='k',
+                linewidth=0.3
+            )
+            
     else:
         ax.scatter(
             embeddings[:, 0], 
@@ -78,17 +146,17 @@ def plot_embeddings(embeddings, labels=None, medoids=None, refined_medoids=None,
     if medoids is not None:
         ax.scatter(
             medoids[:, 0], medoids[:, 1],
-            c='black', marker='X', s=100,  # Made slightly smaller (was 150)
-            edgecolors="white", linewidth=1.0,  # Made thinner (was 1.5)
+            c='black', marker='X', s=100,
+            edgecolors="white", linewidth=1.0,
             label="Classical Medoids"
         )
     
     if refined_medoids is not None:
         ax.scatter(
             refined_medoids[:, 0], refined_medoids[:, 1],
-            c='white', marker='X', s=100,  # Made slightly smaller (was 150)
-            edgecolors="#FF00FF",  # Fuchsia/magenta color
-            linewidth=1.0,  # Made thinner (was 1.5)
+            c='white', marker='X', s=100,
+            edgecolors="#FF00FF",
+            linewidth=1.0,
             label="Quantum-Refined Medoids"
         )
     
@@ -118,7 +186,9 @@ def plot_cluster_spectrum(
     title="Cluster Spectrum",
     save_path=None,
     show=False,
-    cmap='Spectral'
+    cmap='Spectral',
+    cluster_colors=None,
+    color_correspondence=None
 ):
     """
     Plot embeddings with colors blended across clusters based on membership probabilities.
@@ -132,6 +202,8 @@ def plot_cluster_spectrum(
         save_path: Path to save the plot
         show: Whether to display the plot
         cmap: Colormap to use for cluster colors (default: 'Spectral')
+        cluster_colors: Optional dictionary mapping original cluster IDs to colors
+        color_correspondence: Optional dictionary mapping refined cluster IDs to original IDs
         
     Returns:
         The matplotlib figure object
@@ -141,13 +213,22 @@ def plot_cluster_spectrum(
     if isinstance(cmap, str):
         cmap = plt.get_cmap(cmap)
     
-    colors = cmap(np.linspace(0, 1, n_clusters))
+    if cluster_colors is not None and color_correspondence is not None:
+        colors = np.zeros((n_clusters, 4))
+        for cluster_idx in range(n_clusters):
+            orig_cluster = color_correspondence.get(cluster_idx, cluster_idx)
+            if orig_cluster in cluster_colors:
+                colors[cluster_idx] = cluster_colors[orig_cluster]
+            else:
+                colors[cluster_idx] = cmap(cluster_idx / max(1, n_clusters - 1))
+    else:
+        colors = cmap(np.linspace(0, 1, n_clusters))
     
-    doc_colors = np.zeros((n_docs, 4))  # RGBA
+    doc_colors = np.zeros((n_docs, 4))
     for cluster_idx in range(n_clusters):
-        doc_colors[:, 0] += membership_probs[:, cluster_idx] * colors[cluster_idx, 0]  # R
-        doc_colors[:, 1] += membership_probs[:, cluster_idx] * colors[cluster_idx, 1]  # G
-        doc_colors[:, 2] += membership_probs[:, cluster_idx] * colors[cluster_idx, 2]  # B
+        doc_colors[:, 0] += membership_probs[:, cluster_idx] * colors[cluster_idx, 0]
+        doc_colors[:, 1] += membership_probs[:, cluster_idx] * colors[cluster_idx, 1]
+        doc_colors[:, 2] += membership_probs[:, cluster_idx] * colors[cluster_idx, 2]
     
     doc_colors[:, 3] = 0.8
     
@@ -175,17 +256,17 @@ def plot_cluster_spectrum(
     if medoids is not None:
         ax.scatter(
             medoids[:, 0], medoids[:, 1],
-            c='black', marker='X', s=100,  # Made slightly smaller (was 150)
-            edgecolors="white", linewidth=1.0,  # Made thinner (was 1.5)
+            c='black', marker='X', s=100,
+            edgecolors="white", linewidth=1.0,
             label="Classical Medoids"
         )
 
     if refined_medoids is not None:
         ax.scatter(
             refined_medoids[:, 0], refined_medoids[:, 1],
-            c='white', marker='X', s=100,  # Made slightly smaller (was 150)
-            edgecolors="#FF00FF",  # Fuchsia/magenta color
-            linewidth=1.0,  # Made thinner (was 1.5)
+            c='white', marker='X', s=100,
+            edgecolors="#FF00FF",
+            linewidth=1.0,
             label="Quantum-Refined Medoids"
         )
 

@@ -19,6 +19,7 @@ from src.models.multi_membership import create_multi_membership_assignments
 from src.models.QuantumClustering import QuantumClustering, compute_clusters
 from box import ConfigBox
 from src.plot_utils import plot_embeddings, load_colormap, plot_cluster_spectrum
+from collections import defaultdict
 
 warnings.filterwarnings("ignore")
 
@@ -227,14 +228,43 @@ def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
 
     return best_k, best_indices, best_dbi
 
-
-def run_pipeline(config, colormap_name=None, clustering_method='classical', multi_membership=False, threshold=0.2):
+def track_cluster_correspondence(initial_labels, final_labels):
     """
-    Run the clustering pipeline with a specified colormap and clustering method.
+    Track how clusters change between initial and final clustering.
+    
+    Args:
+        initial_labels: Cluster labels from initial clustering
+        final_labels: Cluster labels after refinement
+        
+    Returns:
+        Dictionary mapping final cluster IDs to most corresponding initial cluster IDs
+    """
+    correspondence = {}
+    
+    overlap_counts = defaultdict(lambda: defaultdict(int))
+    
+    for i, (init_label, final_label) in enumerate(zip(initial_labels, final_labels)):
+        overlap_counts[final_label][init_label] += 1
+    
+    for final_cluster in np.unique(final_labels):
+        if len(overlap_counts[final_cluster]) > 0:
+            init_cluster = max(overlap_counts[final_cluster].items(), 
+                              key=lambda x: x[1])[0]
+            correspondence[final_cluster] = init_cluster
+        else:
+            correspondence[final_cluster] = final_cluster
+    
+    return correspondence
+    
+def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering_method='classical', multi_membership=False, threshold=0.2):
+    """
+    Run the clustering pipeline with a specified colormap and optional cross-validation.
     
     Args:
         config: Configuration object with clustering parameters
         colormap_name: Name of the colormap to use
+        run_cv: Whether to run cross-validation evaluation
+        cv_folds: Number of CV folds
         clustering_method: Which clustering method to use ('classical', 'hdbscan', 'gmm', 'hdbscan-gmm')
         multi_membership: Whether to create multi-membership assignments
         threshold: Probability threshold for multi-membership (default: 0.2)
@@ -245,6 +275,8 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
         'timestamp': timestamp,
         'clustering_method': clustering_method,
         'colormap': colormap_name if colormap_name else "Spectral",
+        'cv_enabled': run_cv,
+        'cv_folds': cv_folds if run_cv else None,
         'multi_membership': multi_membership,
         'threshold': threshold if multi_membership else None,
         'quantum_refinement': True,
@@ -386,11 +418,24 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
     print(f"{clustering_method.capitalize()} Clustering Labels: {initial_labels}")
     print(f"{clustering_method.capitalize()} Medoid Indices: {medoid_indices}")
 
+    unique_initial_labels = np.unique(initial_labels)
+    n_initial_clusters = len(unique_initial_labels)
+    
+    initial_colors = {}
+    for i, label in enumerate(unique_initial_labels):
+        if isinstance(cmap, str):
+            color_value = plt.get_cmap(cmap)(i / max(1, n_initial_clusters - 1))
+        else:
+            color_value = cmap(i / max(1, n_initial_clusters - 1))
+        initial_colors[label] = color_value
+
     medoid_embeddings = clustering.extract_medoids(doc_embeddings_reduced, medoid_indices)
     np.save(os.path.join(run_output_dir, "medoid_embeddings.npy"), medoid_embeddings)
     np.save(os.path.join(run_output_dir, "medoid_indices.npy"), medoid_indices)
+    
     plot_embeddings(doc_embeddings_reduced, labels=initial_labels, medoids=medoid_embeddings,
-                title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap)
+                   title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap, 
+                   cluster_colors=initial_colors)
 
     quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
     best_k, refined_medoid_indices, best_dbi = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)
@@ -424,6 +469,14 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
         'cluster': final_cluster_labels
     })
     cluster_mapping.to_csv(os.path.join(run_output_dir, "doc_clusters.csv"), index=False)
+
+    color_correspondence = track_cluster_correspondence(initial_labels, final_cluster_labels)
+    
+    correspondence_df = pd.DataFrame({
+        'final_cluster': list(color_correspondence.keys()),
+        'initial_cluster': list(color_correspondence.values())
+    })
+    correspondence_df.to_csv(os.path.join(run_output_dir, "cluster_correspondence.csv"), index=False)
 
     n_quantum_clusters = len(np.unique(final_cluster_labels))
     n_docs = len(doc_ids)
@@ -547,9 +600,11 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
                 labels=final_cluster_labels,
                 medoids=medoid_embeddings,
                 refined_medoids=refined_medoid_embeddings,
-                title=final_plot_title,
-                save_path=final_clusters_plot_path,
-                cmap=cmap)
+                title=final_plot_title, 
+                save_path=final_clusters_plot_path, 
+                cmap=cmap,
+                cluster_colors=initial_colors,
+                color_correspondence=color_correspondence)
     
     if has_probabilities:
         spectrum_title = "Cluster Color Spectrum\n" + \
@@ -562,7 +617,9 @@ def run_pipeline(config, colormap_name=None, clustering_method='classical', mult
             refined_medoids=refined_medoid_embeddings,
             title=spectrum_title,
             save_path=spectrum_plot_path,
-            cmap=cmap
+            cmap=cmap,
+            cluster_colors=initial_colors,
+            color_correspondence=color_correspondence
         )
         print(f"Saved cluster spectrum plot at: {spectrum_plot_path}")
 
@@ -723,4 +780,4 @@ if __name__ == "__main__":
             'random_state': config.classical_clustering.random_state
         })
 
-    run_pipeline(config, args.colormap, args.method, args.multi_membership, args.threshold)
+    run_pipeline(config, args.colormap, True, 5, args.method, args.multi_membership, args.threshold)
