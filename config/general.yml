@@ -1,0 +1,5 @@
+general:
+  reduction: False
+
+quantum_clustering:
+  k_range: [75]

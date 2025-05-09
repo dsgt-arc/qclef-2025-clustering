@@ -751,8 +751,13 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    with open("config/kmedoids.yml", "r") as file:
+
+    with open("config/general.yml", "r") as file:
         config = ConfigBox(yaml.safe_load(file))
+  
+    with open("config/kmedoids.yml", "r") as file:
+        kmedoids_config = ConfigBox(yaml.safe_load(file))
+        config.update(kmedoids_config)
     
     try:
         with open("config/hdbscan.yml", "r") as file:

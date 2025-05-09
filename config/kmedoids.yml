@@ -1,12 +1,7 @@
-general:
-  reduction: False
 classical_clustering:
   metric: 'euclidean'
   k_range: [80, 100, 125, 150]
   random_state: 42
-
-quantum_clustering:
-  k_range: [75]
 
 quantum_kmedoids:
   use_quantum: false
