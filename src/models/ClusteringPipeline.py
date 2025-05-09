@@ -567,7 +567,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 query_embeddings = np.stack(valid_queries["query_embeddings"].values)
                 qrels_df = valid_queries[['query_id', 'doc_id', 'relevance']]
                 
-                if config.general.retrieval:
+                if config.general.reduction:
                     umap_reducer_plot = umap_reducer
                 else:
                     umap_reducer_plot = None 
