@@ -47,6 +47,160 @@ def ndcg_at_k(r, k):
         return 0.0
     return dcg_at_k(r, k) / dcg_max
 
+def save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, method_name, timestamp):
+    """
+    Save information about initial clustering results.
+    
+    Args:
+        initial_labels: Cluster labels from initial clustering
+        doc_ids: List of document IDs
+        run_output_dir: Directory to save results
+        method_name: Name of the clustering method used
+        timestamp: Timestamp string for filenames
+    """
+    # Save initial cluster assignments
+    initial_cluster_mapping = pd.DataFrame({
+        'doc_id': doc_ids,
+        'initial_cluster': initial_labels
+    })
+    initial_cluster_mapping.to_csv(os.path.join(run_output_dir, f"initial_doc_clusters.csv"), index=False)
+    
+    # Compute and save initial cluster size distribution
+    initial_cluster_sizes = pd.Series(initial_labels).value_counts().sort_index()
+    initial_cluster_sizes_df = pd.DataFrame({
+        'cluster_id': initial_cluster_sizes.index,
+        'size': initial_cluster_sizes.values
+    })
+    initial_cluster_sizes_df.to_csv(os.path.join(run_output_dir, f"initial_cluster_sizes.csv"), index=False)
+    
+    # Print cluster distribution summary
+    print(f"\nInitial {method_name.upper()} cluster distribution summary:")
+    print(f"Number of clusters: {len(initial_cluster_sizes)}")
+    print(f"Min cluster size: {initial_cluster_sizes.min()}")
+    print(f"Max cluster size: {initial_cluster_sizes.max()}")
+    print(f"Mean cluster size: {initial_cluster_sizes.mean():.2f}")
+    print(f"Median cluster size: {initial_cluster_sizes.median():.2f}")
+    
+    # Save visual representation of initial distribution
+    plt.figure(figsize=(12, 6))
+    
+    # Sort initial clusters by size for better visualization
+    sorted_indices = np.argsort(-initial_cluster_sizes.values)
+    sorted_clusters = initial_cluster_sizes.index[sorted_indices]
+    sorted_sizes = initial_cluster_sizes.values[sorted_indices]
+    
+    plt.bar(range(len(sorted_clusters)), sorted_sizes)
+    plt.title(f"Initial {method_name.upper()} Cluster Size Distribution")
+    plt.xlabel("Cluster ID (sorted by size)")
+    plt.ylabel("Number of Documents")
+    
+    # Add a reference line for mean size
+    plt.axhline(y=initial_cluster_sizes.mean(), color='r', linestyle='-', 
+                label=f'Mean Size: {initial_cluster_sizes.mean():.1f}')
+    plt.legend()
+    
+    plt.tight_layout()
+    initial_dist_plot_path = os.path.join(run_output_dir, f"initial_cluster_distribution_{timestamp}.png")
+    plt.savefig(initial_dist_plot_path)
+    plt.close()
+    print(f"Saved initial cluster distribution plot at: {initial_dist_plot_path}")
+    
+    # Calculate percentage of documents in top clusters
+    top_clusters = initial_cluster_sizes.nlargest(10)
+    total_docs = sum(initial_cluster_sizes)
+    top_percentage = sum(top_clusters) / total_docs * 100
+    
+    print(f"Top 10 clusters contain {top_percentage:.2f}% of all documents")
+    
+    # Save top clusters to file
+    top_clusters_df = pd.DataFrame({
+        'cluster_id': top_clusters.index,
+        'size': top_clusters.values,
+        'percentage': (top_clusters.values / total_docs * 100).round(2)
+    })
+    top_clusters_df.to_csv(os.path.join(run_output_dir, f"initial_top_clusters.csv"), index=False)
+    
+    return initial_cluster_sizes
+
+def compare_cluster_distributions(initial_labels, final_labels, run_output_dir, method_name, timestamp):
+    """
+    Create comparison visualizations between initial and final cluster distributions.
+    
+    Args:
+        initial_labels: Initial cluster labels
+        final_labels: Final cluster labels after refinement
+        run_output_dir: Directory to save results
+        method_name: Name of the clustering method
+        timestamp: Timestamp string for filenames
+    """
+    try:
+        initial_sizes = pd.Series(initial_labels).value_counts()
+        final_sizes = pd.Series(final_labels).value_counts()
+        
+        plt.figure(figsize=(12, 10))
+        
+        # Sort initial clusters by size for better visualization
+        sorted_init_indices = np.argsort(-initial_sizes.values)
+        sorted_init_clusters = initial_sizes.index[sorted_init_indices]
+        sorted_init_sizes = initial_sizes.values[sorted_init_indices]
+        
+        plt.subplot(2, 1, 1)
+        plt.bar(range(len(sorted_init_clusters)), sorted_init_sizes)
+        plt.title(f"Initial {len(initial_sizes)} Clusters Size Distribution")
+        plt.xlabel("Cluster ID (sorted by size)")
+        plt.ylabel("Number of Documents")
+        plt.yscale('log')
+        
+        # Final clusters
+        plt.subplot(2, 1, 2)
+        plt.bar(final_sizes.index, final_sizes.values)
+        plt.title(f"Final {len(final_sizes)} Clusters Size Distribution")
+        plt.xlabel("Cluster ID")
+        plt.ylabel("Number of Documents")
+        plt.yscale('log')
+        
+        plt.tight_layout()
+        comparison_plot_path = os.path.join(run_output_dir, f"cluster_size_comparison_{timestamp}.png")
+        plt.savefig(comparison_plot_path)
+        plt.close()
+        print(f"Saved cluster size comparison plot at: {comparison_plot_path}")
+        
+        # Create statistics comparison table
+        initial_stats = {
+            'num_clusters': len(initial_sizes),
+            'min_size': initial_sizes.min(),
+            'max_size': initial_sizes.max(),
+            'mean_size': initial_sizes.mean(),
+            'median_size': initial_sizes.median(),
+            'top10_pct': (initial_sizes.nlargest(10).sum() / initial_sizes.sum() * 100),
+            'top3_pct': (initial_sizes.nlargest(3).sum() / initial_sizes.sum() * 100)
+        }
+        
+        final_stats = {
+            'num_clusters': len(final_sizes),
+            'min_size': final_sizes.min(),
+            'max_size': final_sizes.max(),
+            'mean_size': final_sizes.mean(),
+            'median_size': final_sizes.median(),
+            'top10_pct': (final_sizes.nlargest(10).sum() / final_sizes.sum() * 100),
+            'top3_pct': (final_sizes.nlargest(3).sum() / final_sizes.sum() * 100)
+        }
+        
+        stats_df = pd.DataFrame({
+            'Initial': initial_stats,
+            'Final': final_stats
+        })
+        
+        stats_df.to_csv(os.path.join(run_output_dir, f"cluster_stats_comparison.csv"))
+        
+        print("\n=== Cluster Distribution Comparison ===")
+        print(f"Initial clusters: {initial_stats['num_clusters']}, Final clusters: {final_stats['num_clusters']}")
+        print(f"Initial top 3 clusters: {initial_stats['top3_pct']:.2f}% of documents")
+        print(f"Final top 3 clusters: {final_stats['top3_pct']:.2f}% of documents")
+        
+    except Exception as e:
+        print(f"Error creating cluster distribution comparison: {str(e)}")
+
 def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assignments, 
                       qrels_df, doc_ids, k=10, umap_reducer=None, multi_cluster_assignments=None):
     """
@@ -326,7 +480,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     doc_ids = train_df['doc_id'].tolist()
 
     query_df = pd.read_csv(query_csv)
- 
+
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     
     umap_reduced_dimensions = umap_reducer.fit_transform(doc_embeddings)
@@ -358,6 +512,9 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
             print("Handling noise points in HDBSCAN results...")
             initial_labels = clustering.handle_noise_points(doc_embeddings_reduced, initial_labels, medoid_indices)
         
+        # Save initial clustering results
+        save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, "hdbscan", timestamp)
+                
         initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
         run_info['results']['initial_clusters'] = clustering.best_k
         run_info['results']['initial_dbi'] = float(initial_dbi)
@@ -369,6 +526,9 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         clustering = GMMClustering(**config.gmm_clustering)
         
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
+
+        # Save initial clustering results
+        save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, "gmm", timestamp)
         
         membership_probs = clustering.get_membership_probabilities()
         np.save(os.path.join(run_output_dir, "gmm_membership_probs.npy"), membership_probs)
@@ -394,6 +554,9 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         clustering = HDBSCANGMMClustering(**config.hdbscan_gmm_clustering)
         
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
+
+        # Save initial clustering results
+        save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, "hdbscan-gmm", timestamp)
         
         membership_probs = clustering.get_membership_probabilities()
         np.save(os.path.join(run_output_dir, "hdbscan_gmm_membership_probs.npy"), membership_probs)
@@ -419,7 +582,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         clustering = ClassicalClustering(**config.classical_clustering)
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
         
-    
+        # Save initial clustering results
+        save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, "classical", timestamp)
  
         initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
         run_info['results']['initial_clusters'] = clustering.best_k
@@ -451,9 +615,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     np.save(os.path.join(run_output_dir, "medoid_indices.npy"), medoid_indices)
     
     
-    pdb.set_trace()
     plot_embeddings(umap_reduced_dimensions, labels=initial_labels, medoids=medoid_embeddings_plot,
-                   title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap, 
+                  title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap, 
                    cluster_colors=initial_colors)
 
     quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
@@ -490,6 +653,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         'cluster': final_cluster_labels
     })
     cluster_mapping.to_csv(os.path.join(run_output_dir, "doc_clusters.csv"), index=False)
+
+    compare_cluster_distributions(initial_labels, final_cluster_labels, run_output_dir, clustering_method, timestamp)
 
     color_correspondence = track_cluster_correspondence(initial_labels, final_cluster_labels)
     
