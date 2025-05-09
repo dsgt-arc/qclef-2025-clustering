@@ -326,9 +326,11 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     doc_ids = train_df['doc_id'].tolist()
 
     query_df = pd.read_csv(query_csv)
-
+ 
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     
+    umap_reduced_dimensions = umap_reducer.fit_transform(doc_embeddings)
+ 
     if config.general.reduction:
         doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
     else: 
@@ -336,7 +338,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     np.save(os.path.join(run_output_dir, "doc_embeddings_reduced.npy"), doc_embeddings_reduced)
     
     umap_title = f"UMAP Reduction\nMethod: {clustering_method.upper()}, {timestamp}"
-    plot_embeddings(doc_embeddings_reduced, title=umap_title, save_path=umap_plot_path, cmap=cmap)
+    plot_embeddings(umap_reduced_dimensions, title=umap_title, save_path=umap_plot_path, cmap=cmap)
 
     has_probabilities = clustering_method in ['gmm', 'hdbscan-gmm']
 
@@ -443,12 +445,14 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
  
 
     medoid_embeddings = clustering.extract_medoids(doc_embeddings_reduced, medoid_indices)
-
+    medoid_embeddings_plot = clustering.extract_medoids(umap_reduced_dimensions, medoid_indices)
  
     np.save(os.path.join(run_output_dir, "medoid_embeddings.npy"), medoid_embeddings)
     np.save(os.path.join(run_output_dir, "medoid_indices.npy"), medoid_indices)
     
-    plot_embeddings(doc_embeddings_reduced, labels=initial_labels, medoids=medoid_embeddings,
+    
+    pdb.set_trace()
+    plot_embeddings(umap_reduced_dimensions, labels=initial_labels, medoids=medoid_embeddings_plot,
                    title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap, 
                    cluster_colors=initial_colors)
 
@@ -459,6 +463,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         print(f"Quantum-Refined Medoid Indices: {refined_medoid_indices}") 
         refined_medoid_indices_of_embeddings = medoid_indices[refined_medoid_indices]
         refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices_of_embeddings] 
+        
+        refined_medoid_embeddings_plot = umap_reduced_dimensions[refined_medoid_indices_of_embeddings] 
         
         print(f"Before QUBO: Assignments to Initial Medoids: {compute_clusters(doc_embeddings_reduced, medoid_indices)}")
         print(f"Refined Medoid Indices Type: {type(refined_medoid_indices)}, Shape: {refined_medoid_indices.shape}")
@@ -614,11 +620,11 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
 
     final_plot_title = "Final Quantum Cluster Assignments\n" + \
                     f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
-    
-    plot_embeddings(doc_embeddings_reduced,
+     
+    plot_embeddings(umap_reduced_dimensions,
                 labels=final_cluster_labels,
-                medoids=medoid_embeddings,
-                refined_medoids=refined_medoid_embeddings,
+                medoids=medoid_embeddings_plot,
+                refined_medoids=refined_medoid_embeddings_plot,
                 title=final_plot_title, 
                 save_path=final_clusters_plot_path, 
                 cmap=cmap,
@@ -630,7 +636,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                         f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
         
         plot_cluster_spectrum(
-            doc_embeddings_reduced,
+            umap_reduced_dimensions,
             quantum_probs,
             medoids=medoid_embeddings,
             refined_medoids=refined_medoid_embeddings,
