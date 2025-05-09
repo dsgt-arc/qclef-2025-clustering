@@ -23,6 +23,8 @@ from collections import defaultdict
 
 warnings.filterwarnings("ignore")
 
+import pdb
+
 def dcg_at_k(r, k):
     """
     Compute Discounted Cumulative Gain at rank k.
@@ -326,13 +328,19 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     query_df = pd.read_csv(query_csv)
 
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
-    doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
+    
+    if config.general.reduction:
+        doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
+    else: 
+        doc_embeddings_reduced = doc_embeddings
     np.save(os.path.join(run_output_dir, "doc_embeddings_reduced.npy"), doc_embeddings_reduced)
     
     umap_title = f"UMAP Reduction\nMethod: {clustering_method.upper()}, {timestamp}"
     plot_embeddings(doc_embeddings_reduced, title=umap_title, save_path=umap_plot_path, cmap=cmap)
 
     has_probabilities = clustering_method in ['gmm', 'hdbscan-gmm']
+
+ 
     if multi_membership and not has_probabilities:
         print(f"Warning: Multi-membership requires 'gmm' or 'hdbscan-gmm' method. Requested method '{clustering_method}' doesn't provide probabilities.")
         multi_membership = False
@@ -409,6 +417,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         clustering = ClassicalClustering(**config.classical_clustering)
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
         
+    
+ 
         initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
         run_info['results']['initial_clusters'] = clustering.best_k
         run_info['results']['initial_dbi'] = float(initial_dbi)
@@ -418,6 +428,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     print(f"{clustering_method.capitalize()} Clustering Labels: {initial_labels}")
     print(f"{clustering_method.capitalize()} Medoid Indices: {medoid_indices}")
 
+ 
     unique_initial_labels = np.unique(initial_labels)
     n_initial_clusters = len(unique_initial_labels)
     
@@ -429,7 +440,11 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
             color_value = cmap(i / max(1, n_initial_clusters - 1))
         initial_colors[label] = color_value
 
+ 
+
     medoid_embeddings = clustering.extract_medoids(doc_embeddings_reduced, medoid_indices)
+
+ 
     np.save(os.path.join(run_output_dir, "medoid_embeddings.npy"), medoid_embeddings)
     np.save(os.path.join(run_output_dir, "medoid_indices.npy"), medoid_indices)
     
@@ -552,6 +567,10 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 query_embeddings = np.stack(valid_queries["query_embeddings"].values)
                 qrels_df = valid_queries[['query_id', 'doc_id', 'relevance']]
                 
+                if config.general.retrieval:
+                    umap_reducer_plot = umap_reducer
+                else:
+                    umap_reducer_plot = None 
                 evaluation_results = evaluate_retrieval(
                     query_embeddings,
                     doc_embeddings_reduced,
@@ -560,7 +579,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                     qrels_df,
                     doc_ids,
                     k=10,
-                    umap_reducer=umap_reducer,
+                    umap_reducer=umap_reducer_plot,
                     multi_cluster_assignments=multi_membership_df if multi_membership else None
                 )
                 
