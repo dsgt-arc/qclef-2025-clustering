@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 import yaml
 import datetime
 import json
-from sklearn.model_selection import KFold
+import itertools
+from sklearn.model_selection import KFold, ParameterGrid
 from sklearn.metrics import davies_bouldin_score
 from sklearn.preprocessing import normalize
 from tqdm import tqdm
@@ -301,14 +302,16 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
     coverage_multi_scores = []
     has_multi = multi_cluster_assignments is not None
     
-    query_ids = qrels_df['query_id'].unique()
+    # Get unique query IDs for evaluation
+    unique_query_ids = qrels_df['query_id'].unique()
     
-    for q_idx, query_id in enumerate(tqdm(query_ids, desc="Evaluating Queries")):
+    for q_idx, query_id in enumerate(unique_query_ids):
         query_qrels = qrels_df[qrels_df['query_id'] == query_id]
         
         if len(query_qrels) == 0:
             continue
         
+        # Get all judged and relevant documents for this query
         judged_doc_ids = set(query_qrels['doc_id'].values)
         relevant_doc_ids = set(query_qrels[query_qrels['relevance'] > 0]['doc_id'].values)
         
@@ -755,6 +758,9 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         clustering_method: Which clustering method to use ('classical', 'hdbscan', 'gmm', 'hdbscan-gmm')
         multi_membership: Whether to create multi-membership assignments
         threshold: Probability threshold for multi-membership (default: 0.2)
+        
+    Returns:
+        Dictionary with run results
     """
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -1002,8 +1008,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     
     # Plot initial clusters
     plot_embeddings(doc_embeddings_reduced, labels=initial_labels, medoids=medoid_embeddings,
-                title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap,
-                cluster_colors=initial_colors)
+                  title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap,
+                  cluster_colors=initial_colors)
 
     # Refinement step - use either quantum annealing or second-stage clustering
     if is_annealing:
@@ -1113,8 +1119,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                     
             row_sums = quantum_probs.sum(axis=1, keepdims=True)
             quantum_probs = np.divide(quantum_probs, row_sums, 
-                                        out=np.zeros_like(quantum_probs), 
-                                        where=row_sums != 0)
+                                      out=np.zeros_like(quantum_probs), 
+                                      where=row_sums != 0)
             
             np.save(os.path.join(run_output_dir, "final_probabilities.npy"), quantum_probs)
             
@@ -1335,15 +1341,183 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     print(f"All results saved to: {run_output_dir}")
     print("===============================")
     
-    plt.show()
-    
     return run_info
 
 
-if __name__ == "__main__":
+def perform_grid_search(config_base, param_grid, doc_embeddings, doc_ids, query_df, 
+                       run_cv=True, cv_folds=5, clustering_method='classical', 
+                       multi_membership=False, threshold=0.2, colormap_name="Spectral"):
+    """
+    Perform grid search over specified parameter values.
+    
+    Args:
+        config_base: Base configuration object to modify with grid parameters
+        param_grid: Dictionary mapping parameter paths to lists of values
+        doc_embeddings: Document embeddings
+        doc_ids: List of document IDs
+        query_df: DataFrame with query information
+        run_cv: Whether to run cross-validation evaluation
+        cv_folds: Number of CV folds
+        clustering_method: Clustering method to use
+        multi_membership: Whether to create multi-membership assignments
+        threshold: Probability threshold for multi-membership
+        colormap_name: Name of the colormap to use
+    
+    Returns:
+        List of results for each parameter combination
+    """
+    # Create all parameter combinations
+    param_keys = list(param_grid.keys())
+    param_values = list(param_grid.values())
+    param_combinations = list(itertools.product(*param_values))
+    
+    results = []
+    best_ndcg = 0
+    best_config = None
+    best_coverage = 0
+    best_dbi = float('inf')
+    
+    # Setup output directory for grid search
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
+    grid_search_dir = os.path.join(data_dir, f"grid_search_{clustering_method}_{timestamp}")
+    os.makedirs(grid_search_dir, exist_ok=True)
+    
+    print(f"Starting grid search with {len(param_combinations)} parameter combinations")
+    print(f"Results will be saved to: {grid_search_dir}")
+    
+    # Create UMAP reducer once if needed
+    umap_reducer = None
+    if getattr(config_base.general, 'reduction', False):
+        umap_reducer = UMAPReducer(random_state=config_base.classical_clustering.random_state)
+        doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
+        print("Applied UMAP reduction to document embeddings")
+    else:
+        doc_embeddings_reduced = doc_embeddings
+        print("Using original document embeddings (no reduction)")
+    
+    for i, param_values in enumerate(param_combinations):
+        # Create configuration for this run
+        config = deepcopy(config_base)
+        
+        # Set parameters
+        for j, param_key in enumerate(param_keys):
+            value = param_values[j]
+            
+            # Parse the parameter key (e.g., "classical_clustering.k_range")
+            key_parts = param_key.split('.')
+            config_obj = config
+            
+            # Navigate to the correct config nested object
+            for part in key_parts[:-1]:
+                config_obj = getattr(config_obj, part)
+            
+            # Set the parameter value
+            setattr(config_obj, key_parts[-1], value)
+        
+        # Create directory for this run
+        param_str = "_".join([f"{k.split('.')[-1]}_{v}" for k, v in zip(param_keys, param_values)])
+        run_dir = os.path.join(grid_search_dir, f"run_{i:03d}_{param_str}")
+        os.makedirs(run_dir, exist_ok=True)
+        
+        # Save configuration
+        config_path = os.path.join(run_dir, "config.json")
+        with open(config_path, 'w') as f:
+            json.dump(dict(config), f, indent=2)
+        
+        print(f"\n==== Grid Search Run {i+1}/{len(param_combinations)} ====")
+        print(f"Parameters: {dict(zip(param_keys, param_values))}")
+        
+        try:
+            # Run clustering pipeline with this configuration
+            run_info = run_pipeline(
+                config,
+                colormap_name=colormap_name,
+                run_cv=run_cv,
+                cv_folds=cv_folds,
+                clustering_method=clustering_method,
+                multi_membership=multi_membership,
+                threshold=threshold
+            )
+            
+            # Save run info
+            run_info_path = os.path.join(run_dir, f"run_info_{run_info['timestamp']}.json")
+            with open(run_info_path, 'w') as f:
+                json.dump(run_info, f, indent=2)
+            
+            # Check if this is the best configuration so far
+            ndcg = run_info['results'].get('ndcg_10', 0)
+            coverage = run_info['results'].get('relevant_coverage', 0)
+            dbi = run_info['results'].get('final_dbi', float('inf'))
+            
+            if ndcg > best_ndcg:
+                best_ndcg = ndcg
+                best_config = deepcopy(config)
+                print(f"New best nDCG: {best_ndcg:.4f}")
+            
+            if coverage > best_coverage:
+                best_coverage = coverage
+                
+            if dbi < best_dbi:
+                best_dbi = dbi
+            
+            # Add parameters to results
+            result = {
+                'params': dict(zip(param_keys, param_values)),
+                'ndcg': ndcg,
+                'coverage': coverage,
+                'dbi': dbi,
+                'run_info': run_info
+            }
+            
+            # Add to results list
+            results.append(result)
+            
+        except Exception as e:
+            print(f"Error in grid search run {i}: {str(e)}")
+            result = {
+                'params': dict(zip(param_keys, param_values)),
+                'error': str(e)
+            }
+            results.append(result)
+    
+    # Save all results
+    results_path = os.path.join(grid_search_dir, "grid_search_results.json")
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    # Create summary DataFrame
+    summary = []
+    for result in results:
+        if 'error' not in result:
+            summary_row = result['params'].copy()
+            summary_row.update({
+                'ndcg': result['ndcg'],
+                'coverage': result['coverage'],
+                'dbi': result['dbi']
+            })
+            summary.append(summary_row)
+    
+    summary_df = pd.DataFrame(summary)
+    summary_df = summary_df.sort_values(by='ndcg', ascending=False)
+    summary_path = os.path.join(grid_search_dir, "grid_search_summary.csv")
+    summary_df.to_csv(summary_path, index=False)
+    
+    # Print best results
+    print("\n==== Grid Search Results ====")
+    print(f"Best nDCG: {best_ndcg:.4f}")
+    print(f"Best Coverage: {best_coverage:.4f}")
+    print(f"Best DBI: {best_dbi:.4f}")
+    print(f"Summary saved to: {summary_path}")
+    
+    return results, summary_df
+
+
+def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='Run clustering pipeline with cross-validation')
+    parser = argparse.ArgumentParser(description='Run clustering pipeline with grid search')
     parser.add_argument('--colormap', type=str, default='Spectral', 
                         help='Colormap to use (file in colormaps dir or matplotlib name)')
     parser.add_argument('--no_cv', action='store_true',
@@ -1360,9 +1534,12 @@ if __name__ == "__main__":
                         help='Probability threshold for multi-membership (default: 0.2)')
     parser.add_argument('--no-annealing', action='store_true',
                         help='Disable quantum annealing and use second-stage clustering instead')
+    parser.add_argument('--grid-search', action='store_true',
+                        help='Enable grid search over parameters')
     
     args = parser.parse_args()
 
+    # Load base configuration
     with open("config/general.yml", "r") as file:
         config = ConfigBox(yaml.safe_load(file))
         # Set annealing flag based on command line argument
@@ -1380,8 +1557,8 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print("HDBSCAN config not found, using default parameters")
         config.hdbscan_clustering = ConfigBox({
-            'min_cluster_size': 20,
-            'min_samples': 25,
+            'min_cluster_size': 5,
+            'min_samples': None,
             'cluster_selection_method': 'leaf',
             'cluster_selection_epsilon': 0.2,
             'metric': 'euclidean',
@@ -1408,8 +1585,8 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print("HDBSCAN-GMM config not found, using default parameters")
         config.hdbscan_gmm_clustering = ConfigBox({
-            'min_cluster_size': 20,
-            'min_samples': 25,
+            'min_cluster_size': 5,
+            'min_samples': None,
             'cluster_selection_method': 'leaf',
             'cluster_selection_epsilon': 0.2,
             'covariance_type': 'full',
@@ -1417,13 +1594,88 @@ if __name__ == "__main__":
             'metric': 'euclidean',
             'random_state': config.classical_clustering.random_state
         })
+    
+    # Load data
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
+    output_csv = os.path.join(data_dir, "antique_doc_embeddings.csv")
+    query_csv = os.path.join(data_dir, "antique_train_queries.csv")
+    
+    def parse_embedding(text):
+        return np.fromstring(text[1:-1], dtype=float, sep=',')
+    
+    train_df = pd.read_csv(output_csv, converters={"doc_embeddings": parse_embedding})
+    doc_embeddings = np.stack(train_df["doc_embeddings"].values)
+    doc_ids = train_df['doc_id'].tolist()
+    
+    query_df = pd.read_csv(query_csv)
+    
+    if args.grid_search:
+        # Define parameter grid based on clustering method
+        param_grid = {}
+        
+        if args.method == 'classical':
+            param_grid = {
+                'classical_clustering.k_range': [[10], [25], [50], [75], [100]]
+            }
+            if args.no_annealing:
+                # Add second-stage parameters
+                param_grid['second_stage_clustering.k_range'] = [[10], [25], [50]]
+        
+        elif args.method == 'hdbscan':
+            param_grid = {
+                'hdbscan_clustering.min_cluster_size': [5, 10, 20],
+                'hdbscan_clustering.cluster_selection_epsilon': [0.1, 0.2, 0.5]
+            }
+        
+        elif args.method == 'gmm':
+            param_grid = {
+                'gmm_clustering.n_components_range': [[10], [25], [50], [75], [100]],
+                'gmm_clustering.covariance_type': ['full', 'tied', 'diag']
+            }
+        
+        elif args.method == 'hdbscan-gmm':
+            param_grid = {
+                'hdbscan_gmm_clustering.min_cluster_size': [5, 10, 20],
+                'hdbscan_gmm_clustering.cluster_selection_epsilon': [0.1, 0.2, 0.5],
+                'hdbscan_gmm_clustering.covariance_type': ['full', 'tied']
+            }
+        
+        # Add quantum parameters if using annealing
+        if not args.no_annealing:
+            param_grid['quantum_clustering.k_range'] = [[10], [25], [50]]
+        
+        # Perform grid search
+        results, summary_df = perform_grid_search(
+            config,
+            param_grid,
+            doc_embeddings,
+            doc_ids,
+            query_df,
+            run_cv=not args.no_cv,
+            cv_folds=args.cv_folds,
+            clustering_method=args.method,
+            multi_membership=args.multi_membership,
+            threshold=args.threshold,
+            colormap_name=args.colormap
+        )
+        
+        # Display top 5 results
+        print("\nTop 5 configurations by nDCG:")
+        print(summary_df.head(5))
+        
+    else:
+        # Run single pipeline with provided configuration
+        run_pipeline(
+            config, 
+            colormap_name=args.colormap,
+            run_cv=not args.no_cv,
+            cv_folds=args.cv_folds,
+            clustering_method=args.method,
+            multi_membership=args.multi_membership,
+            threshold=args.threshold
+        )
 
-    run_pipeline(
-        config, 
-        colormap_name=args.colormap,
-        run_cv=not args.no_cv,
-        cv_folds=args.cv_folds,
-        clustering_method=args.method,
-        multi_membership=args.multi_membership,
-        threshold=args.threshold
-    )
+
+if __name__ == "__main__":
+    main()
