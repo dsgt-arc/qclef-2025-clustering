@@ -1,6 +1,6 @@
 classical_clustering:
   metric: 'euclidean'
-  k_range: [80, 100, 125, 150]
+  k_range: [75]
   random_state: 42
 
 quantum_kmedoids:

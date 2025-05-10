@@ -205,9 +205,10 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
                       qrels_df, doc_ids, k=10, umap_reducer=None, multi_cluster_assignments=None):
     """
     Evaluate retrieval performance using nDCG@k and relevant coverage, with multi-membership support.
+    Fixed version that properly handles unique queries with all their relevance judgments.
     
     Args:
-        query_embeddings: Embeddings of queries
+        query_embeddings: Embeddings of unique queries
         doc_embeddings: Embeddings of documents
         centroids: Cluster centroids in reduced space
         cluster_assignments: Cluster assignments for each document
@@ -242,25 +243,39 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
     coverage_multi_scores = []
     has_multi = multi_cluster_assignments is not None
     
-    query_ids = qrels_df['query_id'].unique()
+    # Get unique query IDs for evaluation
+    unique_query_ids = qrels_df['query_id'].unique()
     
-    for q_idx, query_id in enumerate(query_ids):
+    for q_idx, query_id in enumerate(unique_query_ids):
         query_qrels = qrels_df[qrels_df['query_id'] == query_id]
         
         if len(query_qrels) == 0:
             continue
         
+        # Get all judged and relevant documents for this query
         judged_doc_ids = set(query_qrels['doc_id'].values)
         relevant_doc_ids = set(query_qrels[query_qrels['relevance'] > 0]['doc_id'].values)
         
         if not relevant_doc_ids:
             continue
-            
-        query_embedding = query_embeddings_norm[q_idx].reshape(1, -1)
         
+        # Debug embedding information
+        if q_idx < 5:
+            print(f"Query {query_id} embedding shape: {query_embeddings_norm[q_idx].shape}")
+            print(f"Query {query_id} embedding first 5 values: {query_embeddings_norm[q_idx][:5]}")
+        
+        # Calculate similarity with centroids for this query
+        query_embedding = query_embeddings_norm[q_idx].reshape(1, -1)
         centroid_similarities = np.dot(query_embedding, centroids_norm.T)[0]
         closest_centroid_idx = np.argmax(centroid_similarities)
-        
+
+        # Debug centroid information
+        if q_idx < 5:
+            print(f"Query {query_id}: Closest centroid is {closest_centroid_idx} with similarity {centroid_similarities[closest_centroid_idx]:.4f}")
+            top_centroids = np.argsort(-centroid_similarities)[:3]
+            print(f"  Top-3 centroids: {top_centroids} with similarities: {centroid_similarities[top_centroids]}")
+
+        # Get documents in the closest cluster
         cluster_docs_idx = np.where(cluster_assignments == closest_centroid_idx)[0]
         
         if len(cluster_docs_idx) == 0:
@@ -271,12 +286,15 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
                 coverage_multi_scores.append(0.0)
             continue
         
+        # Get document IDs in the cluster
         cluster_doc_ids = [doc_ids[idx] for idx in cluster_docs_idx]
         
+        # Calculate coverage - how many relevant docs are in the cluster
         retrieved_relevant = relevant_doc_ids.intersection(set(cluster_doc_ids))
         coverage = len(retrieved_relevant) / len(relevant_doc_ids) if relevant_doc_ids else 0.0
         coverage_scores.append(coverage)
         
+        # Rank documents in the cluster based on similarity to query
         cluster_doc_embeddings = doc_embeddings_norm[cluster_docs_idx]
         
         if umap_reducer is not None:
@@ -290,6 +308,7 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         ranked_cluster_indices = [cluster_docs_idx[idx] for idx in sorted_indices]
         ranked_doc_ids = [doc_ids[idx] for idx in ranked_cluster_indices]
         
+        # Calculate nDCG based on relevance of top-k documents
         relevance_scores = []
         for doc_id in ranked_doc_ids[:k]:
             rel_values = query_qrels[query_qrels['doc_id'] == doc_id]['relevance'].values
@@ -301,6 +320,7 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         ndcg = ndcg_at_k(relevance_scores, k)
         ndcg_scores.append(ndcg)
         
+        # Handle multi-membership clusters if enabled
         if has_multi:
             multi_docs_idx = []
             for doc_idx, row in enumerate(multi_cluster_assignments.iloc):
@@ -342,7 +362,12 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
             ndcg_multi = ndcg_at_k(multi_relevance_scores, k)
             ndcg_multi_scores.append(ndcg_multi)
         
+        # Print detailed debug info for first 5 queries
         if q_idx < 5:
+            print(f"  Relevance scores for top {k}: {relevance_scores}")
+            print(f"  DCG: {dcg_at_k(relevance_scores, k):.4f}, Ideal DCG: {dcg_at_k(sorted(relevance_scores, reverse=True), k):.4f}")
+            if ndcg == 0.0 and any(score > 0 for score in relevance_scores):
+                print(f"  WARNING: nDCG=0 despite having relevant documents in top {k}!")
             judged_docs_found = len(set(cluster_doc_ids).intersection(judged_doc_ids))
             total_judged = len(judged_doc_ids)
             print(f"Query {query_id}: Found {judged_docs_found}/{total_judged} judged docs, "
@@ -722,12 +747,15 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     print(f"Final Quantum-Refined Medoid Embeddings:\n {refined_medoid_embeddings}")
     print(f"Unique Cluster Assignments: {np.unique(final_cluster_labels)}")
 
+    # Inside the run_pipeline function, replace the evaluation section with:
     print("\nEvaluating retrieval metrics on full dataset...")
     try:
+        # Parse query embeddings from CSV
         query_df['query_embeddings'] = query_df['query_embeddings'].apply(
             lambda x: np.fromstring(x[1:-1], dtype=float, sep=',') if isinstance(x, str) else x
         )
         
+        # Filter to queries with valid embeddings
         valid_queries = query_df[query_df['query_embeddings'].apply(lambda x: isinstance(x, np.ndarray) and len(x) > 0)]
         
         if len(valid_queries) > 0:
@@ -735,15 +763,42 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
             valid_queries = valid_queries[valid_queries['query_embeddings'].apply(lambda x: len(x) == first_shape)]
             
             if len(valid_queries) > 0:
-                query_embeddings = np.stack(valid_queries["query_embeddings"].values)
+                # Get unique query IDs
+                unique_query_ids = valid_queries['query_id'].unique()
+                print(f"Found {len(unique_query_ids)} unique queries out of {len(valid_queries)} query-document pairs")
+                
+                # Create deduplicated query dataframe with unique embeddings
+                dedup_queries = []
+                for qid in unique_query_ids:
+                    # Get all rows for this query ID
+                    query_rows = valid_queries[valid_queries['query_id'] == qid]
+                    # Just take the first one - they should all have the same embedding
+                    dedup_queries.append(query_rows.iloc[0])
+                
+                # Create deduplicated dataframe
+                dedup_query_df = pd.DataFrame(dedup_queries)
+                print(f"Created deduplicated query dataframe with {len(dedup_query_df)} unique queries")
+                
+                # Extract embeddings from deduplicated queries
+                unique_query_embeddings = np.stack(dedup_query_df["query_embeddings"].values)
+                
+                # Keep all relevance judgments from the original dataframe
                 qrels_df = valid_queries[['query_id', 'doc_id', 'relevance']]
+                
+                # Verify we have unique embeddings after deduplication
+                if len(unique_query_embeddings) >= 5:
+                    print("Checking first 5 query embeddings after deduplication:")
+                    for i in range(5):
+                        print(f"Query {dedup_query_df['query_id'].iloc[i]} first 5 values: {unique_query_embeddings[i][:5]}")
                 
                 if config.general.reduction:
                     umap_reducer_plot = umap_reducer
                 else:
-                    umap_reducer_plot = None 
+                    umap_reducer_plot = None
+                    
+                # Call the evaluation function with deduplicated queries but complete relevance judgments
                 evaluation_results = evaluate_retrieval(
-                    query_embeddings,
+                    unique_query_embeddings,
                     doc_embeddings_reduced,
                     refined_medoid_embeddings,
                     final_cluster_labels,
