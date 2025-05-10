@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import LinearSegmentedColormap
 from collections import defaultdict
+from collections import Counter
 
 def load_colormap(colormap_name, colormaps_dir=None):
     """
@@ -21,6 +22,227 @@ def load_colormap(colormap_name, colormaps_dir=None):
         return LinearSegmentedColormap.from_list(colormap_name, cmap_data)
     else:
         return plt.get_cmap(colormap_name)
+
+def plot_merged_clusters(embeddings, initial_labels, final_labels, 
+                   correspondence, save_path=None, cmap='Spectral',
+                   cluster_colors=None, title="Merged Clusters Visualization"):
+    """
+    Create a visualization highlighting one final cluster and its merged component clusters.
+    The visualization greys out irrelevant clusters and highlights the component clusters
+    with distinct colors.
+    
+    Args:
+        embeddings: 2D array of shape (n_samples, 2) - UMAP reduced embeddings
+        initial_labels: Initial cluster labels before quantum refinement
+        final_labels: Final cluster labels after quantum refinement
+        correspondence: Dictionary mapping final cluster IDs to most corresponding initial cluster IDs
+        save_path: Path to save the plot
+        cmap: Colormap to use for cluster colors
+        cluster_colors: Optional dictionary mapping original cluster IDs to colors
+        title: Plot title
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import matplotlib.cm as cm
+    from collections import Counter
+    
+    # Find a good example of a merged cluster
+    # This finds a final cluster that contains points from multiple initial clusters
+    merged_clusters = []
+    
+    # For each final cluster, count how many initial clusters contributed to it
+    for final_cluster in np.unique(final_labels):
+        # Get all points in this final cluster
+        mask = final_labels == final_cluster
+        # Count the initial cluster assignments for these points
+        initial_counts = Counter(initial_labels[mask])
+        # If this final cluster contains points from multiple initial clusters
+        if len(initial_counts) > 1:
+            # Store the final cluster ID, the number of initial clusters, and the size
+            merged_clusters.append((final_cluster, len(initial_counts), sum(mask)))
+    
+    # Sort by number of contributing clusters (descending) and then by size (descending)
+    merged_clusters.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    
+    if not merged_clusters:
+        print("No merged clusters found!")
+        return
+    
+    # Select the best example (first in sorted list)
+    target_cluster = merged_clusters[0][0]
+    
+    print(f"Selected final cluster {target_cluster} for visualization, "
+          f"which contains points from {merged_clusters[0][1]} initial clusters "
+          f"with {merged_clusters[0][2]} total points")
+    
+    # Find which initial clusters contributed to this final cluster
+    mask = final_labels == target_cluster
+    contributing_initial_clusters = np.unique(initial_labels[mask])
+    
+    # Create a figure
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # Configure axes
+    ax.spines['right'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    ax.spines['left'].set_visible(True)
+    ax.spines['bottom'].set_visible(True)
+    ax.spines['left'].set_color('black')
+    ax.spines['bottom'].set_color('black')
+    ax.set_axisbelow(True)
+    ax.tick_params(axis='both', which='both', length=0, labelsize=0)
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.grid(True, linestyle="--", alpha=0.5, color="#b3c6ff")
+    
+    if isinstance(cmap, str):
+        cmap = plt.get_cmap(cmap)
+    
+    # First plot all points in grey (background)
+    ax.scatter(
+        embeddings[:, 0], 
+        embeddings[:, 1], 
+        c='#888888',  # Darker grey
+        s=15, 
+        alpha=0.35,
+        edgecolors='none'
+    )
+    
+    # Generate colors for contributing initial clusters
+    if cluster_colors is not None:
+        colors = [cluster_colors.get(cluster, cmap(i / max(1, len(contributing_initial_clusters)))) 
+                 for i, cluster in enumerate(contributing_initial_clusters)]
+    else:
+        colors = cmap(np.linspace(0, 1, len(contributing_initial_clusters)))
+    
+    # Plot each contributing initial cluster with its own color
+    for i, initial_cluster in enumerate(contributing_initial_clusters):
+        # Points that were in this initial cluster and ended up in the target final cluster
+        mask = (initial_labels == initial_cluster) & (final_labels == target_cluster)
+        
+        if np.sum(mask) > 0:
+            ax.scatter(
+                embeddings[mask, 0], 
+                embeddings[mask, 1], 
+                c=[colors[i]], 
+                s=30, 
+                alpha=0.8,
+                edgecolors='k',
+                linewidth=0.3
+            )
+    
+    # Add a title
+    ax.set_title(f"{title}\nFinal Cluster {target_cluster}", fontsize=14, pad=15)
+    
+    # Save the plot
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved merged clusters plot to {save_path}")
+    
+    plt.close()
+
+def plot_top_merged_clusters(embeddings, initial_labels, final_labels, 
+                      correspondence, save_dir=None, cmap='Spectral',
+                      highlight_color='#25A085', title_prefix="Merged Clusters Visualization",
+                      num_clusters=10):
+    """
+    Create visualizations for the top merged clusters, using a highlight color.
+    
+    Args:
+        embeddings: 2D array of shape (n_samples, 2) - UMAP reduced embeddings
+        initial_labels: Initial cluster labels before quantum refinement
+        final_labels: Final cluster labels after quantum refinement
+        correspondence: Dictionary mapping final cluster IDs to most corresponding initial cluster IDs
+        save_dir: Directory to save the plots
+        cmap: Colormap to use for cluster colors (not used for points but kept for compatibility)
+        highlight_color: Color to use for highlighting the merged cluster points
+        title_prefix: Prefix for the plot titles
+        num_clusters: Number of top merged clusters to visualize
+    """
+    
+    # Find merged clusters
+    merged_clusters = []
+    
+    # For each final cluster, count how many initial clusters contributed to it
+    for final_cluster in np.unique(final_labels):
+        # Get all points in this final cluster
+        mask = final_labels == final_cluster
+        # Count the initial cluster assignments for these points
+        initial_counts = Counter(initial_labels[mask])
+        # If this final cluster contains points from multiple initial clusters
+        if len(initial_counts) > 1:
+            # Store the final cluster ID, the number of initial clusters, and the size
+            merged_clusters.append((final_cluster, len(initial_counts), sum(mask)))
+    
+    # Sort by number of contributing clusters (descending) and then by size (descending)
+    merged_clusters.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    
+    if not merged_clusters:
+        print("No merged clusters found!")
+        return
+    
+    # Limit to the top N clusters
+    top_clusters = merged_clusters[:min(num_clusters, len(merged_clusters))]
+    print(f"Visualizing top {len(top_clusters)} merged clusters out of {len(merged_clusters)} found")
+    
+    # Create a visualization for each top cluster
+    for idx, (target_cluster, num_contributing, size) in enumerate(top_clusters):
+        print(f"Cluster {idx+1}/{len(top_clusters)}: Final cluster {target_cluster} contains points from "
+              f"{num_contributing} initial clusters with {size} total points")
+        
+        # Find which initial clusters contributed to this final cluster
+        mask = final_labels == target_cluster
+        contributing_initial_clusters = np.unique(initial_labels[mask])
+        
+        # Create a figure
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        # Configure axes
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.spines['left'].set_visible(True)
+        ax.spines['bottom'].set_visible(True)
+        ax.spines['left'].set_color('black')
+        ax.spines['bottom'].set_color('black')
+        ax.set_axisbelow(True)
+        ax.tick_params(axis='both', which='both', length=0, labelsize=0)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.grid(True, linestyle="--", alpha=0.5, color="#b3c6ff")
+        
+        # First plot all points in grey (background)
+        ax.scatter(
+            embeddings[:, 0], 
+            embeddings[:, 1], 
+            c='#888888',  # Darker grey
+            s=15, 
+            alpha=0.35,
+            edgecolors='none'
+        )
+        
+        # Plot the merged cluster points in the highlight color
+        mask = final_labels == target_cluster
+        ax.scatter(
+            embeddings[mask, 0], 
+            embeddings[mask, 1], 
+            c=highlight_color,  # Use the teal highlight color
+            s=55, 
+            alpha=0.75,
+            edgecolors='k',
+            linewidth=0.6
+        )
+        
+        # Add a title
+        ax.set_title(f"{title_prefix} #{idx+1}\nFinal Cluster {target_cluster} (merged from {num_contributing} clusters)", 
+                     fontsize=14, pad=15)
+        
+        # Save the plot
+        if save_dir:
+            save_path = os.path.join(save_dir, f"merged_cluster_{idx+1}_of_{len(top_clusters)}_{target_cluster}.png")
+            plt.savefig(save_path, dpi=300, bbox_inches="tight")
+            print(f"Saved merged cluster plot to {save_path}")
+        
+        plt.close()
 
 def generate_cluster_colors(n_clusters, cmap='Spectral'):
     """

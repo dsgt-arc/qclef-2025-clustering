@@ -17,6 +17,9 @@ from src.models.GMMClustering import GMMClustering
 from src.models.HDBSCANGMMClustering import HDBSCANGMMClustering
 from src.models.multi_membership import create_multi_membership_assignments
 from src.models.QuantumClustering import QuantumClustering, compute_clusters
+from src.plot_utils import plot_merged_clusters
+from src.plot_utils import plot_top_merged_clusters
+
 from box import ConfigBox
 from src.plot_utils import plot_embeddings, load_colormap, plot_cluster_spectrum
 from collections import defaultdict
@@ -850,7 +853,37 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 cmap=cmap,
                 cluster_colors=initial_colors,
                 color_correspondence=color_correspondence)
-    
+
+    # merged_clusters_plot_path = os.path.join(run_output_dir, f"merged_clusters_{timestamp}.png")
+    # plot_merged_clusters(
+    #     umap_reduced_dimensions,
+    #     initial_labels,
+    #     final_cluster_labels,
+    #     color_correspondence,
+    #     save_path=merged_clusters_plot_path,
+    #     cmap=cmap,
+    #     cluster_colors=initial_colors,
+    #     title=f"Cluster Merging Visualization\nMethod: {clustering_method.upper()}, k={best_k}"
+    # )
+    # print(f"Saved merged clusters visualization to {merged_clusters_plot_path}")
+
+    merged_clusters_dir = os.path.join(run_output_dir, f"merged_clusters_{timestamp}")
+    os.makedirs(merged_clusters_dir, exist_ok=True)
+
+    # Create visualizations for top 10 merged clusters
+    plot_top_merged_clusters(
+        umap_reduced_dimensions,
+        initial_labels,
+        final_cluster_labels,
+        color_correspondence,
+        save_dir=merged_clusters_dir,
+        cmap=cmap,
+        highlight_color='#25A085',
+        title_prefix=f"Cluster Merging Visualization\nMethod: {clustering_method.upper()}, k={best_k}",
+        num_clusters=10
+    )
+    print(f"Saved top merged clusters visualizations to {merged_clusters_dir}")
+
     if has_probabilities:
         spectrum_title = "Cluster Color Spectrum\n" + \
                         f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
