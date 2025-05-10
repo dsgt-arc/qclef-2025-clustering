@@ -49,7 +49,6 @@ def ndcg_at_k(r, k):
     if not dcg_max:
         return 0.0
     return dcg_at_k(r, k) / dcg_max
-
 def save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, method_name, timestamp):
     """
     Save information about initial clustering results.
@@ -124,7 +123,6 @@ def save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, met
     top_clusters_df.to_csv(os.path.join(run_output_dir, f"initial_top_clusters.csv"), index=False)
     
     return initial_cluster_sizes
-
 def compare_cluster_distributions(initial_labels, final_labels, run_output_dir, method_name, timestamp):
     """
     Create comparison visualizations between initial and final cluster distributions.
@@ -203,7 +201,6 @@ def compare_cluster_distributions(initial_labels, final_labels, run_output_dir, 
         
     except Exception as e:
         print(f"Error creating cluster distribution comparison: {str(e)}")
-
 def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assignments, 
                       qrels_df, doc_ids, k=10, umap_reducer=None, multi_cluster_assignments=None):
     """
@@ -393,7 +390,6 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         results['coverage_multi'] = np.mean(coverage_multi_scores) if coverage_multi_scores else 0.0
     
     return results
-
 def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
     """Iterate over k_range and find the best k using QUBO clustering."""
     best_k = None
@@ -411,7 +407,6 @@ def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
     print(f"Final chosen k after QUBO clustering: {best_k}")
 
     return best_k, best_indices, best_dbi
-
 def track_cluster_correspondence(initial_labels, final_labels):
     """
     Track how clusters change between initial and final clustering.
@@ -439,7 +434,7 @@ def track_cluster_correspondence(initial_labels, final_labels):
             correspondence[final_cluster] = final_cluster
     
     return correspondence
-    
+   
 def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering_method='classical', multi_membership=False, threshold=0.2):
     """
     Run the clustering pipeline with a specified colormap and optional cross-validation.
@@ -463,13 +458,20 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         'cv_folds': cv_folds if run_cv else None,
         'multi_membership': multi_membership,
         'threshold': threshold if multi_membership else None,
-        'quantum_refinement': True,
+        'annealing': config.general.annealing if hasattr(config.general, 'annealing') else True,
+        'second_stage': hasattr(config, 'second_stage_clustering') and 
+                       getattr(config.second_stage_clustering, 'enabled', False) and 
+                       not getattr(config.general, 'annealing', True) and
+                       clustering_method == 'classical',
         'hyperparameters': {},
         'results': {}
     }
     
+    # Add hyperparameters to run_info based on clustering method
     if clustering_method == 'classical':
         run_info['hyperparameters']['classical'] = dict(config.classical_clustering)
+        if run_info['second_stage'] and hasattr(config, 'second_stage_clustering'):
+            run_info['hyperparameters']['second_stage'] = dict(config.second_stage_clustering)
     elif clustering_method == 'hdbscan':
         run_info['hyperparameters']['hdbscan'] = dict(config.hdbscan_clustering)
     elif clustering_method == 'gmm':
@@ -477,63 +479,71 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     elif clustering_method == 'hdbscan-gmm':
         run_info['hyperparameters']['hdbscan_gmm'] = dict(config.hdbscan_gmm_clustering)
     
-    run_info['hyperparameters']['quantum'] = dict(config.quantum_clustering)
+    # Add quantum parameters only if using annealing
+    if run_info['annealing']:
+        run_info['hyperparameters']['quantum'] = dict(config.quantum_clustering)
     
     np.random.seed(config.classical_clustering.random_state)
 
+    # Setup directories
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "data"))
     colormaps_dir = os.path.abspath(os.path.join(script_dir, "..", "..", "colormaps"))
     output_csv = os.path.join(data_dir, "antique_doc_embeddings.csv")
     query_csv = os.path.join(data_dir, "antique_train_queries.csv")
     
-    run_output_dir = os.path.join(data_dir, f"run_{timestamp}_{clustering_method}")
+    # Create output directory with method and timestamp
+    refinement_method = "quantum" if run_info['annealing'] else "second_stage" if run_info['second_stage'] else "none"
+    run_output_dir = os.path.join(data_dir, f"run_{timestamp}_{clustering_method}_{refinement_method}")
     os.makedirs(run_output_dir, exist_ok=True)
     
+    # Define plot paths
     umap_plot_path = os.path.join(run_output_dir, f"umap_plot_{timestamp}.png")
     initial_clusters_plot_path = os.path.join(run_output_dir, f"{clustering_method}_clusters_{timestamp}.png")
     final_clusters_plot_path = os.path.join(run_output_dir, f"final_clusters_{timestamp}.png")
     spectrum_plot_path = os.path.join(run_output_dir, f"cluster_spectrum_{timestamp}.png")
 
+    # Load colormap
     if colormap_name is None:
         colormap_name = "Spectral"
-    
     cmap = load_colormap(colormap_name, colormaps_dir)
     
+    # Parse embeddings function
     def parse_embedding(text):
         return np.fromstring(text[1:-1], dtype=float, sep=',')
 
+    # Load data
     train_df = pd.read_csv(output_csv, converters={"doc_embeddings": parse_embedding})
     doc_embeddings = np.stack(train_df["doc_embeddings"].values)
     doc_ids = train_df['doc_id'].tolist()
-
     query_df = pd.read_csv(query_csv)
 
+    # Initialize UMAP reducer
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
-    
     umap_reduced_dimensions = umap_reducer.fit_transform(doc_embeddings)
  
+    # Apply dimension reduction if specified
     if config.general.reduction:
         doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
     else: 
         doc_embeddings_reduced = doc_embeddings
     np.save(os.path.join(run_output_dir, "doc_embeddings_reduced.npy"), doc_embeddings_reduced)
     
+    # Plot UMAP reduced dimensions
     umap_title = f"UMAP Reduction\nMethod: {clustering_method.upper()}, {timestamp}"
     plot_embeddings(umap_reduced_dimensions, title=umap_title, save_path=umap_plot_path, cmap=cmap)
 
+    # Check if method can provide probabilities (for multi-membership)
     has_probabilities = clustering_method in ['gmm', 'hdbscan-gmm']
-
- 
     if multi_membership and not has_probabilities:
         print(f"Warning: Multi-membership requires 'gmm' or 'hdbscan-gmm' method. Requested method '{clustering_method}' doesn't provide probabilities.")
         multi_membership = False
         run_info['multi_membership'] = False
     
+    # Perform initial clustering based on method
     if clustering_method == 'hdbscan':
         print("Using HDBSCAN clustering...")
         clustering = HDBSCANClustering(**config.hdbscan_clustering)
-        
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
         
         if -1 in initial_labels:
@@ -542,20 +552,15 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         
         # Save initial clustering results
         save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, "hdbscan", timestamp)
-                
         initial_dbi = davies_bouldin_score(doc_embeddings_reduced, initial_labels) if len(np.unique(initial_labels)) > 1 else float('inf')
         run_info['results']['initial_clusters'] = clustering.best_k
         run_info['results']['initial_dbi'] = float(initial_dbi)
-        
         plot_title = f"HDBSCAN Clustering\nk={clustering.best_k}, DBI={initial_dbi:.4f}, {timestamp}"
         
     elif clustering_method == 'gmm':
         print("Using Gaussian Mixture Model clustering...")
         clustering = GMMClustering(**config.gmm_clustering)
-        
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
-
-        # Save initial clustering results
         save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, "gmm", timestamp)
         
         membership_probs = clustering.get_membership_probabilities()
@@ -582,8 +587,6 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         clustering = HDBSCANGMMClustering(**config.hdbscan_gmm_clustering)
         
         initial_labels, medoid_indices = clustering.find_optimal_k(doc_embeddings_reduced)
-
-        # Save initial clustering results
         save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, "hdbscan-gmm", timestamp)
         
         membership_probs = clustering.get_membership_probabilities()
@@ -622,7 +625,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     print(f"{clustering_method.capitalize()} Clustering Labels: {initial_labels}")
     print(f"{clustering_method.capitalize()} Medoid Indices: {medoid_indices}")
 
- 
+    # Set up visualization colors
     unique_initial_labels = np.unique(initial_labels)
     n_initial_clusters = len(unique_initial_labels)
     
@@ -634,45 +637,92 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
             color_value = cmap(i / max(1, n_initial_clusters - 1))
         initial_colors[label] = color_value
 
- 
-
+    # Extract medoid embeddings
     medoid_embeddings = clustering.extract_medoids(doc_embeddings_reduced, medoid_indices)
     medoid_embeddings_plot = clustering.extract_medoids(umap_reduced_dimensions, medoid_indices)
  
     np.save(os.path.join(run_output_dir, "medoid_embeddings.npy"), medoid_embeddings)
     np.save(os.path.join(run_output_dir, "medoid_indices.npy"), medoid_indices)
     
-    
+    # Plot initial clusters
     plot_embeddings(umap_reduced_dimensions, labels=initial_labels, medoids=medoid_embeddings_plot,
                   title=plot_title, save_path=initial_clusters_plot_path, cmap=cmap, 
                    cluster_colors=initial_colors)
 
-    quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
-    best_k, refined_medoid_indices, best_dbi = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)
+    # Refinement step - use either quantum annealing or second-stage clustering
+    is_annealing = getattr(config.general, 'annealing', True)
+    is_second_stage = (not is_annealing and 
+                      clustering_method == 'classical' and 
+                      hasattr(config, 'second_stage_clustering') and 
+                      getattr(config.second_stage_clustering, 'enabled', False))
+    
+    if is_annealing:
+        # Quantum annealing approach (original)
+        print("Using quantum annealing for cluster refinement...")
+        quantum_clustering = QuantumClustering(config.quantum_clustering.k_range, medoid_embeddings, config)
+        best_k, refined_medoid_indices, best_dbi = find_best_k_with_qubo(quantum_clustering, medoid_embeddings)
 
-    if refined_medoid_indices is not None:
-        print(f"Quantum-Refined Medoid Indices: {refined_medoid_indices}") 
-        refined_medoid_indices_of_embeddings = medoid_indices[refined_medoid_indices]
-        refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices_of_embeddings] 
-        
-        refined_medoid_embeddings_plot = umap_reduced_dimensions[refined_medoid_indices_of_embeddings] 
-        
-        print(f"Before QUBO: Assignments to Initial Medoids: {compute_clusters(doc_embeddings_reduced, medoid_indices)}")
-        print(f"Refined Medoid Indices Type: {type(refined_medoid_indices)}, Shape: {refined_medoid_indices.shape}")
-        print(f"Refined Medoid Embeddings Shape: {refined_medoid_embeddings.shape}")
-        print(f"Before Assigning Clusters, Medoid Indices: {refined_medoid_indices_of_embeddings}")
-        final_cluster_labels = compute_clusters(doc_embeddings_reduced, refined_medoid_indices_of_embeddings)
-        print(f"After QUBO: Assignments to Quantum Medoids: {final_cluster_labels}")
+        if refined_medoid_indices is not None:
+            print(f"Quantum-Refined Medoid Indices: {refined_medoid_indices}") 
+            refined_medoid_indices_of_embeddings = medoid_indices[refined_medoid_indices]
+            refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices_of_embeddings] 
+            
+            refined_medoid_embeddings_plot = umap_reduced_dimensions[refined_medoid_indices_of_embeddings] 
+            
+            print(f"Before QUBO: Assignments to Initial Medoids: {compute_clusters(doc_embeddings_reduced, medoid_indices)}")
+            print(f"Refined Medoid Indices Type: {type(refined_medoid_indices)}, Shape: {refined_medoid_indices.shape}")
+            print(f"Refined Medoid Embeddings Shape: {refined_medoid_embeddings.shape}")
+            print(f"Before Assigning Clusters, Medoid Indices: {refined_medoid_indices_of_embeddings}")
+            final_cluster_labels = compute_clusters(doc_embeddings_reduced, refined_medoid_indices_of_embeddings)
+            print(f"After QUBO: Assignments to Quantum Medoids: {final_cluster_labels}")
 
+            run_info['results']['final_clusters'] = int(best_k)
+            run_info['results']['final_dbi'] = float(best_dbi)
+            refinement_method = "quantum"
+        else:
+            raise ValueError("QUBO Solver failed to find valid medoids.")
+        
+    elif is_second_stage:
+        # Second-stage k-medoids clustering
+        print("Using second-stage classical clustering for refinement...")
+        # Perform second-stage clustering on the medoids
+        final_cluster_labels, refined_medoid_indices, best_k, best_dbi = clustering.cluster_medoids(
+            doc_embeddings_reduced,
+            medoid_embeddings,
+            medoid_indices,
+            config
+        )
+        
+        # Get the embeddings of the refined medoids
+        refined_medoid_indices_of_embeddings = refined_medoid_indices
+        refined_medoid_embeddings = doc_embeddings_reduced[refined_medoid_indices_of_embeddings]
+        refined_medoid_embeddings_plot = umap_reduced_dimensions[refined_medoid_indices_of_embeddings]
+        
+        print(f"Second-Stage Clustering: k={best_k}, DBI={best_dbi:.4f}")
+        
         run_info['results']['final_clusters'] = int(best_k)
         run_info['results']['final_dbi'] = float(best_dbi)
+        refinement_method = "second_stage"
+        
     else:
-        raise ValueError("QUBO Solver failed to find valid medoids.")
+        # No refinement - just use initial clustering
+        print("No refinement applied, using initial clustering results...")
+        final_cluster_labels = initial_labels
+        refined_medoid_indices = medoid_indices
+        refined_medoid_embeddings = medoid_embeddings
+        refined_medoid_embeddings_plot = medoid_embeddings_plot
+        best_k = len(np.unique(initial_labels))
+        best_dbi = initial_dbi
+        
+        run_info['results']['final_clusters'] = int(best_k)
+        run_info['results']['final_dbi'] = float(best_dbi)
+        refinement_method = "none"
     
-    print(f"Final chosen k after QUBO clustering: {best_k}")
+    print(f"Final chosen k after {refinement_method} refinement: {best_k}")
     print(f"Final DBI: {best_dbi:.4f}")
 
-    np.save(os.path.join(run_output_dir, "final_quantum_clusters.npy"), final_cluster_labels)
+    # Save final clustering results
+    np.save(os.path.join(run_output_dir, f"final_{refinement_method}_clusters.npy"), final_cluster_labels)
     np.save(os.path.join(run_output_dir, "refined_medoid_embeddings.npy"), refined_medoid_embeddings)
     np.save(os.path.join(run_output_dir, "refined_medoid_indices.npy"), refined_medoid_indices)
     
@@ -692,6 +742,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     })
     correspondence_df.to_csv(os.path.join(run_output_dir, "cluster_correspondence.csv"), index=False)
 
+    # Handle probabilities for multi-membership
     n_quantum_clusters = len(np.unique(final_cluster_labels))
     n_docs = len(doc_ids)
     
@@ -722,8 +773,9 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                                         out=np.zeros_like(quantum_probs), 
                                         where=row_sums != 0)
             
-            np.save(os.path.join(run_output_dir, "quantum_probabilities.npy"), quantum_probs)
+            np.save(os.path.join(run_output_dir, "final_probabilities.npy"), quantum_probs)
     
+    # Multi-membership assignments
     multi_membership_df = None
     if has_probabilities and multi_membership:
         print(f"Creating multi-membership assignments with threshold={threshold}...")
@@ -747,7 +799,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
             'percent_multi': float((np.sum(membership_counts > 1) / len(doc_ids)) * 100)
         }
 
-    print(f"Final Quantum-Refined Medoid Embeddings:\n {refined_medoid_embeddings}")
+    print(f"Final Refined Medoid Embeddings:\n {refined_medoid_embeddings}")
     print(f"Unique Cluster Assignments: {np.unique(final_cluster_labels)}")
 
     # Inside the run_pipeline function, replace the evaluation section with:
@@ -841,7 +893,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         run_info['results']['ndcg_10'] = 0.0
         run_info['results']['relevant_coverage'] = 0.0
 
-    final_plot_title = "Final Quantum Cluster Assignments\n" + \
+    # Create plots
+    final_plot_title = f"Final {refinement_method.capitalize()} Cluster Assignments\n" + \
                     f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
      
     plot_embeddings(umap_reduced_dimensions,
@@ -854,19 +907,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
                 cluster_colors=initial_colors,
                 color_correspondence=color_correspondence)
 
-    # merged_clusters_plot_path = os.path.join(run_output_dir, f"merged_clusters_{timestamp}.png")
-    # plot_merged_clusters(
-    #     umap_reduced_dimensions,
-    #     initial_labels,
-    #     final_cluster_labels,
-    #     color_correspondence,
-    #     save_path=merged_clusters_plot_path,
-    #     cmap=cmap,
-    #     cluster_colors=initial_colors,
-    #     title=f"Cluster Merging Visualization\nMethod: {clustering_method.upper()}, k={best_k}"
-    # )
-    # print(f"Saved merged clusters visualization to {merged_clusters_plot_path}")
-
+    # Create merged clusters visualization
     merged_clusters_dir = os.path.join(run_output_dir, f"merged_clusters_{timestamp}")
     os.makedirs(merged_clusters_dir, exist_ok=True)
 
@@ -884,6 +925,7 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     )
     print(f"Saved top merged clusters visualizations to {merged_clusters_dir}")
 
+    # Create spectrum plot for probabilistic methods
     if has_probabilities:
         spectrum_title = "Cluster Color Spectrum\n" + \
                         f"Method: {clustering_method.upper()}, k={best_k}, DBI={best_dbi:.4f}, {timestamp}"
@@ -901,20 +943,23 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
         )
         print(f"Saved cluster spectrum plot at: {spectrum_plot_path}")
 
-    print(f"Saved final quantum cluster plot at: {final_clusters_plot_path}")
+    print(f"Saved final {refinement_method} cluster plot at: {final_clusters_plot_path}")
     
+    # Save run information
     run_info_path = os.path.join(run_output_dir, f"run_info_{timestamp}.json")
     with open(run_info_path, 'w') as f:
         json.dump(run_info, f, indent=2)
     print(f"Saved run information to {run_info_path}")
     
-    summary_path = os.path.join(data_dir, f"run_summary_{clustering_method}_{timestamp}.json")
+    summary_path = os.path.join(data_dir, f"run_summary_{clustering_method}_{refinement_method}_{timestamp}.json")
     with open(summary_path, 'w') as f:
         json.dump(run_info, f, indent=2)
     
+    # Print summary
     print("\n=== Clustering Run Summary ===")
     print(f"Timestamp: {timestamp}")
     print(f"Method: {clustering_method}" + (" with Multi-Membership" if multi_membership else ""))
+    print(f"Refinement: {refinement_method}")
     print(f"Initial Clusters: {run_info['results']['initial_clusters']}, DBI: {run_info['results']['initial_dbi']:.4f}")
     print(f"Final Clusters: {run_info['results']['final_clusters']}, DBI: {run_info['results']['final_dbi']:.4f}")
     print(f"nDCG@10: {run_info['results']['ndcg_10']:.4f}, Relevant Coverage: {run_info['results']['relevant_coverage']:.4f}")
@@ -992,7 +1037,6 @@ def create_hybrid_probabilistic_assignments(doc_ids, initial_probs, quantum_labe
     
     print(f"Saved hybrid probabilistic assignments to {os.path.join(data_dir, f'{prefix}hybrid_cluster_membership.csv')}")
 
-
 if __name__ == "__main__":
     import argparse
     
@@ -1007,12 +1051,16 @@ if __name__ == "__main__":
                         help='Enable multi-membership assignments (only works with gmm or hdbscan-gmm)')
     parser.add_argument('--threshold', type=float, default=0.2,
                         help='Probability threshold for multi-membership (default: 0.2)')
+    parser.add_argument('--no-annealing', action='store_true',
+                        help='Disable quantum annealing and use second-stage clustering instead')
     
     args = parser.parse_args()
 
-
     with open("config/general.yml", "r") as file:
         config = ConfigBox(yaml.safe_load(file))
+        # Set annealing flag based on command line argument
+        if args.no_annealing:
+            config.general.annealing = False
   
     with open("config/kmedoids.yml", "r") as file:
         kmedoids_config = ConfigBox(yaml.safe_load(file))
