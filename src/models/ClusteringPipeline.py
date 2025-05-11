@@ -17,6 +17,7 @@ from src.models.GMMClustering import GMMClustering
 from src.models.HDBSCANGMMClustering import HDBSCANGMMClustering
 from src.models.multi_membership import create_multi_membership_assignments
 from src.models.QuantumClustering import QuantumClustering, compute_clusters
+from src.models.QuantumClustering import prepare_clustering_submission
 from src.plot_utils import plot_merged_clusters
 from src.plot_utils import plot_top_merged_clusters
 
@@ -201,6 +202,7 @@ def compare_cluster_distributions(initial_labels, final_labels, run_output_dir, 
         
     except Exception as e:
         print(f"Error creating cluster distribution comparison: {str(e)}")
+        
 def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assignments, 
                       qrels_df, doc_ids, k=10, umap_reducer=None, multi_cluster_assignments=None):
     """
@@ -390,6 +392,7 @@ def evaluate_retrieval(query_embeddings, doc_embeddings, centroids, cluster_assi
         results['coverage_multi'] = np.mean(coverage_multi_scores) if coverage_multi_scores else 0.0
     
     return results
+
 def find_best_k_with_qubo(quantum_clustering, medoid_embeddings):
     """Iterate over k_range and find the best k using QUBO clustering."""
     best_k = None
@@ -434,7 +437,7 @@ def track_cluster_correspondence(initial_labels, final_labels):
             correspondence[final_cluster] = final_cluster
     
     return correspondence
-   
+
 def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering_method='classical', multi_membership=False, threshold=0.2):
     """
     Run the clustering pipeline with a specified colormap and optional cross-validation.
@@ -679,6 +682,22 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
             run_info['results']['final_clusters'] = int(best_k)
             run_info['results']['final_dbi'] = float(best_dbi)
             refinement_method = "quantum"
+
+            problem_ids = []
+            if hasattr(quantum_clustering, 'problem_ids'):
+                problem_ids = quantum_clustering.problem_ids
+            
+            # NOW add the submission code here AFTER final_cluster_labels is defined
+            prepare_clustering_submission(
+                doc_embeddings_reduced,
+                doc_ids,
+                final_cluster_labels,
+                refined_medoid_indices_of_embeddings,
+                run_output_dir,
+                clustering_method,
+                config,  # Pass config
+                problem_ids  # Pass problem IDs
+            )
         else:
             raise ValueError("QUBO Solver failed to find valid medoids.")
         

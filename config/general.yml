@@ -3,4 +3,4 @@ general:
   annealing: True  # Controls whether to use quantum annealing for cluster refinement
 
 quantum_clustering:
-  k_range: [50]
+  k_range: [10]

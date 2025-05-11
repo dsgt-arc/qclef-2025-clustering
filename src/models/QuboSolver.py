@@ -4,6 +4,7 @@ from dwave.system import LeapHybridSampler
 from qclef import qa_access as qa
 import dimod as dmd
 from src.models.QuboBuilder import QuboBuilder, KMedoidsQuboBuilder
+import json
 
 
 class QuboSolver:
@@ -15,6 +16,7 @@ class QuboSolver:
         self.n_clusters = n_clusters
         self.num_reads = num_reads
         self.config = config
+        self.problem_ids = []
     
     def run_QuboSolver(self, data, bqm_method='kmedoids'):
         """
@@ -59,8 +61,10 @@ class QuboSolver:
             sampler = EmbeddingComposite(DWaveSampler())
             response = qa.submit(sampler, EmbeddingComposite.sample, bqm, 
                                 num_reads=self.num_reads, label="3 - Quantum Clustering")
+            if hasattr(response, 'info') and 'problem_id' in response.info:
+                self.problem_ids.append(response.info['problem_id'])
             valid_sample = self._find_valid_k_sample(response, n_clusters)
-            
+            problem_id = response.info['problem_id']
             if valid_sample is not None:
                 return builder.decode_solution(valid_sample)
             else:
@@ -74,6 +78,8 @@ class QuboSolver:
         elif solver_config.use_hybrid:
             sampler = LeapHybridSampler()
             response = qa.submit(sampler, LeapHybridSampler.sample, bqm, label="3 - Hybrid Clustering")
+            if hasattr(response, 'info') and 'problem_id' in response.info:
+                self.problem_ids.append(response.info['problem_id'])
             valid_sample = self._find_valid_k_sample(response, n_clusters)
 
             if valid_sample is not None:
@@ -89,6 +95,8 @@ class QuboSolver:
             sampler = SimulatedAnnealingSampler()
             response = qa.submit(sampler, SimulatedAnnealingSampler.sample, bqm, 
                                 num_reads=self.num_reads, label="3 - Simulated Clustering")
+            if hasattr(response, 'info') and 'problem_id' in response.info:
+                self.problem_ids.append(response.info['problem_id'])
             valid_sample = self._find_valid_k_sample(response, n_clusters)
             
             if valid_sample is not None:
@@ -130,6 +138,8 @@ class QuboSolver:
             new_bqm.update(constraint_bqm)
             
             response = qa.submit(sampler, sample_method, new_bqm, **kwargs)
+            if hasattr(response, 'info') and 'problem_id' in response.info:
+                self.problem_ids.append(response.info['problem_id'])
             valid_sample = self._find_valid_k_sample(response, n_clusters)
             if valid_sample is not None:
                 return builder.decode_solution(valid_sample)

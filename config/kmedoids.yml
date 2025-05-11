@@ -1,6 +1,6 @@
 classical_clustering:
   metric: 'euclidean'
-  k_range: [75]
+  k_range: [25]
   random_state: 42
 
 quantum_kmedoids:
@@ -11,8 +11,8 @@ quantum_kmedoids:
   random_state: 42
 
 # Configuration for second-stage classical clustering (alternative to annealing)
-# second_stage_clustering:
-#   enabled: true  # Controls whether to use second-stage clustering when annealing is false
-#   k_range: [10, 25, 50]  # Possible final cluster sizes for second-stage
-#   metric: 'euclidean'
-#   random_state: 42
+second_stage_clustering:
+  enabled: true  # Controls whether to use second-stage clustering when annealing is false
+  k_range: [10, 25, 50]  # Possible final cluster sizes for second-stage
+  metric: 'euclidean'
+  random_state: 42
