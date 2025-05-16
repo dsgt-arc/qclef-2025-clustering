@@ -1616,7 +1616,7 @@ def main():
         
         if args.method == 'classical':
             param_grid = {
-                'classical_clustering.k_range': [[10], [25], [50], [75], [100]]
+                'classical_clustering.k_range': [[25], [50], [75], [100], [150]]
             }
             if args.no_annealing:
                 # Add second-stage parameters
@@ -1624,21 +1624,21 @@ def main():
         
         elif args.method == 'hdbscan':
             param_grid = {
-                'hdbscan_clustering.min_cluster_size': [5, 10, 20],
+                'hdbscan_clustering.min_cluster_size': [5, 10, 25, 50],
                 'hdbscan_clustering.cluster_selection_epsilon': [0.1, 0.2, 0.5]
             }
         
         elif args.method == 'gmm':
             param_grid = {
-                'gmm_clustering.n_components_range': [[10], [25], [50], [75], [100]],
-                'gmm_clustering.covariance_type': ['full', 'tied', 'diag']
+                'gmm_clustering.n_components_range': [[75], [100], [150]],
+                'gmm_clustering.covariance_type': ['full']
             }
         
         elif args.method == 'hdbscan-gmm':
             param_grid = {
-                'hdbscan_gmm_clustering.min_cluster_size': [5, 10, 20],
+                'hdbscan_gmm_clustering.min_cluster_size': [5, 10, 25, 50],
                 'hdbscan_gmm_clustering.cluster_selection_epsilon': [0.1, 0.2, 0.5],
-                'hdbscan_gmm_clustering.covariance_type': ['full', 'tied']
+                'hdbscan_gmm_clustering.covariance_type': ['full']
             }
         
         # Add quantum parameters if using annealing
