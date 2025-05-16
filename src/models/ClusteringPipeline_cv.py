@@ -25,8 +25,7 @@ from src.models.QuantumClustering import QuantumClustering, compute_clusters
 from src.plot_utils import plot_embeddings, load_colormap, plot_cluster_spectrum
 from src.plot_utils import plot_merged_clusters, plot_top_merged_clusters
 from box import ConfigBox
-import pdb
-    
+
 warnings.filterwarnings("ignore")
 
 def save_initial_clustering_results(initial_labels, doc_ids, run_output_dir, method_name, timestamp):
@@ -598,7 +597,6 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
             
             multi_membership_df = pd.DataFrame(data)
         
-        
         if not test_qrels.empty:
             eval_results = evaluate_retrieval(
                 query_embeddings,
@@ -608,7 +606,7 @@ def run_cv_evaluation(doc_embeddings, doc_embeddings_reduced, config, query_df, 
                 test_qrels,
                 test_doc_ids,
                 k=10,
-                umap_reducer=None,
+                umap_reducer=umap_reducer,
                 multi_cluster_assignments=multi_membership_df
             )
             
@@ -851,12 +849,8 @@ def run_pipeline(config, colormap_name=None, run_cv=True, cv_folds=5, clustering
     # Initialize UMAP reducer
     umap_reducer = UMAPReducer(random_state=config.classical_clustering.random_state)
     
-
-    
-    #pdb.set_trace()
     # Apply dimension reduction if specified
     if config.general.reduction:
-        
         doc_embeddings_reduced = umap_reducer.fit_transform(doc_embeddings)
     else: 
         doc_embeddings_reduced = doc_embeddings
@@ -1403,9 +1397,7 @@ def perform_grid_search(config_base, param_grid, doc_embeddings, doc_ids, query_
         doc_embeddings_reduced = doc_embeddings
         print("Using original document embeddings (no reduction)")
     
-    for i, param_values in enumerate(tqdm(param_combinations, desc="Grid Search")):
-        print(f"\n==== Grid Search Progress: {i+1}/{len(param_combinations)} ({(i+1)/len(param_combinations)*100:.1f}%) ====")
-
+    for i, param_values in enumerate(param_combinations):
         # Create configuration for this run
         config = deepcopy(config_base)
         
@@ -1624,29 +1616,29 @@ def main():
         
         if args.method == 'classical':
             param_grid = {
-                'classical_clustering.k_range': [[25], [50], [75], [100], [150]]
+                'classical_clustering.k_range': [[10], [25], [50], [75], [100]]
             }
-            # if args.no_annealing:
-            #     # Add second-stage parameters
-            #     param_grid['second_stage_clustering.k_range'] = [[10], [25], [50]]
+            if args.no_annealing:
+                # Add second-stage parameters
+                param_grid['second_stage_clustering.k_range'] = [[10], [25], [50]]
         
         elif args.method == 'hdbscan':
             param_grid = {
-                'hdbscan_clustering.min_cluster_size': [5, 10, 20, 50],
+                'hdbscan_clustering.min_cluster_size': [5, 10, 20],
                 'hdbscan_clustering.cluster_selection_epsilon': [0.1, 0.2, 0.5]
             }
         
         elif args.method == 'gmm':
             param_grid = {
-                'gmm_clustering.n_components_range': [[75], [100], [150]],
-                'gmm_clustering.covariance_type': ['full']
+                'gmm_clustering.n_components_range': [[10], [25], [50], [75], [100]],
+                'gmm_clustering.covariance_type': ['full', 'tied', 'diag']
             }
         
         elif args.method == 'hdbscan-gmm':
             param_grid = {
-                'hdbscan_gmm_clustering.min_cluster_size': [5, 10, 20, 50],
+                'hdbscan_gmm_clustering.min_cluster_size': [5, 10, 20],
                 'hdbscan_gmm_clustering.cluster_selection_epsilon': [0.1, 0.2, 0.5],
-                'hdbscan_gmm_clustering.covariance_type': ['full']
+                'hdbscan_gmm_clustering.covariance_type': ['full', 'tied']
             }
         
         # Add quantum parameters if using annealing

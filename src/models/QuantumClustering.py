@@ -109,7 +109,7 @@ def prepare_clustering_submission(doc_embeddings, doc_ids, final_cluster_labels,
     # Determine method based on config
     method = "QA" if hasattr(config, 'quantum_kmedoids') and config.quantum_kmedoids.use_quantum else "SA"
     group_name = "ds-at-gt-qclef"
-    submission_id = "1"
+    submission_id = "100"
     
     # Create proper filename format
     filename = f"{num_centroids}_{method}_{group_name}_{submission_id}.txt"
