@@ -10,7 +10,7 @@ class QuantumClustering:
         self.k_range = k_range
         self.data = data
         self.config = config
-        self.problem_ids = []  # Add this to track problem IDs
+        self.problem_ids = []
 
     def solve_qubo(self, medoid_embeddings, k):
         """Run QUBO clustering for a given k (no longer searching for best k inside this function)."""
@@ -24,7 +24,6 @@ class QuantumClustering:
         
         refined_medoid_indices = solver.solve(qubo_dict, k, self.data, builder)
         
-        # Get problem IDs from solver if available
         if hasattr(solver, 'problem_ids'):
             self.problem_ids.extend(solver.problem_ids)
 
@@ -55,9 +54,10 @@ def prepare_clustering_submission(doc_embeddings, doc_ids, final_cluster_labels,
                              run_output_dir, clustering_method, config, problem_ids=None):
     """
     Prepare submission file for the quantum clustering competition.
+    Uses original embeddings for centroid coordinates.
     
     Args:
-        doc_embeddings: Document embeddings
+        doc_embeddings: Document embeddings (ORIGINAL space, not reduced)
         doc_ids: List of document IDs
         final_cluster_labels: Final cluster assignments
         refined_medoid_indices: Indices of refined medoids
@@ -67,30 +67,26 @@ def prepare_clustering_submission(doc_embeddings, doc_ids, final_cluster_labels,
         problem_ids: List of problem IDs from quantum annealing submissions
     """
     print("\nPreparing submission file for quantum clustering competition...")
+    print(f"Using original embeddings with shape: {doc_embeddings.shape}")
     
-    # Create submission format
     submission = []
     
-    # Get unique cluster IDs
     unique_clusters = np.unique(final_cluster_labels)
     num_centroids = len(unique_clusters)
     
-    # For each cluster, create an entry
     for cluster_id in unique_clusters:
-        # Get documents in this cluster
         cluster_docs_idx = np.where(final_cluster_labels == cluster_id)[0]
         cluster_doc_ids = [doc_ids[idx] for idx in cluster_docs_idx]
         
-        # Find the centroid for this cluster
         if cluster_id < len(refined_medoid_indices):
             centroid_idx = refined_medoid_indices[cluster_id]
             centroid_coords = doc_embeddings[centroid_idx].tolist()
+            print(f"Cluster {cluster_id}: Using medoid {centroid_idx} from original space")
         else:
-            # Alternative: calculate the centroid from cluster members
-            cluster_embeddings = np.array([doc_embeddings[idx] for idx in cluster_docs_idx])
+            cluster_embeddings = doc_embeddings[cluster_docs_idx]
             centroid_coords = np.mean(cluster_embeddings, axis=0).tolist()
+            print(f"Cluster {cluster_id}: Using mean centroid from original space")
         
-        # Create cluster data object
         cluster_data = {
             'centroid': centroid_coords,
             'docs': cluster_doc_ids
@@ -98,28 +94,23 @@ def prepare_clustering_submission(doc_embeddings, doc_ids, final_cluster_labels,
         
         submission.append(cluster_data)
     
-    # Add problem IDs as the last line
     submission_json = json.dumps(submission)
+    
     if problem_ids and len(problem_ids) > 0:
         submission_text = submission_json + "\n" + json.dumps(problem_ids)
     else:
-        # If no problem IDs provided, use the default SA IDs
         submission_text = submission_json + "\n" + json.dumps(["SA-36", "SA-37", "SA-38", "SA-39", "SA-40", "SA-41", "SA-42"])
     
-    # Determine method based on config
     method = "QA" if hasattr(config, 'quantum_kmedoids') and config.quantum_kmedoids.use_quantum else "SA"
     group_name = "ds-at-gt-qclef"
     submission_id = "100"
     
-    # Create proper filename format
     filename = f"{num_centroids}_{method}_{group_name}_{submission_id}.txt"
     
-    # Save to run directory
     submission_file = os.path.join(run_output_dir, filename)
     with open(submission_file, 'w') as f:
         f.write(submission_text)
     
-    # Also save to submissions directory
     submissions_dir = os.path.join("/config/workspace/submissions")
     os.makedirs(submissions_dir, exist_ok=True)
     submissions_file = os.path.join(submissions_dir, filename)
@@ -128,5 +119,6 @@ def prepare_clustering_submission(doc_embeddings, doc_ids, final_cluster_labels,
     
     print(f"Saved clustering submission to {submission_file}")
     print(f"Also saved to submissions directory: {submissions_file}")
+    print(f"Submission uses original embedding space with dimension: {len(submission[0]['centroid'])}")
     
     return submission_file
