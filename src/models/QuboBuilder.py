@@ -4,25 +4,18 @@ from scipy.spatial import distance
 import numpy as np
 import dimod as dmd
 
-
 class QuboBuilder(ABC):
-    """
-    Abstract base class for building QUBO matrices for different clustering methods.
-    This enforces a consistent interface for all derived QUBO builders.
-    """
+
     @abstractmethod
     def build_qubo(self, data):
-        """Build and return a QUBO dictionary for the given data."""
         pass
     
     @abstractmethod
     def decode_solution(self, sample, data=None):
-        """Decode the solution from the QUBO solver."""
         pass
     
     @staticmethod
     def to_upper_triangular(M):
-        """Convert the matrix to an upper triangular form required for QUBO."""
         diag = np.diag(M)
         diagM = np.diag(diag)
 
@@ -34,7 +27,6 @@ class QuboBuilder(ABC):
 
     @staticmethod
     def matrix_to_dict(M):
-        """Convert a QUBO matrix to a dictionary format required by D-Wave solvers."""
         q = {}
         for i in range(len(M)):
             for j in range(i, len(M)):
@@ -44,26 +36,13 @@ class QuboBuilder(ABC):
 
 
 class KMedoidsQuboBuilder(QuboBuilder):
-    """
-    QUBO builder specifically for K-Medoids clustering.
-    Implements different formulations of the QUBO matrix for K-Medoids.
-    """
+
     def __init__(self, n_clusters, config=None):
         self.n_clusters = n_clusters
         self.config = config
     
     def build_qubo(self, data, method='auto_constraint'):
-        """
-        Build a QUBO dictionary for K-Medoids clustering.
-        
-        Args:
-            data: Input data for clustering
-            method: The method to use for building the QUBO ('auto_constraint', 
-                   'dimod_constraint', 'quadratic_penalty', etc.)
-        
-        Returns:
-            A dictionary representation of the QUBO matrix
-        """
+
         if method == 'auto_constraint':
             return self.build_kmedoids_auto_constraint(data)
         elif method == 'dimod_constraint':
@@ -74,16 +53,7 @@ class KMedoidsQuboBuilder(QuboBuilder):
             raise ValueError(f"Unknown QUBO building method: {method}")
     
     def decode_solution(self, sample, data=None):
-        """
-        Extract cluster indices from QUBO solution.
-        
-        Args:
-            sample: The sample output from the QUBO solver
-            data: Optional data points (used for force-valid solutions)
-            
-        Returns:
-            numpy array of cluster indices
-        """
+
         cluster_indices = [i for i, v in sample.items() if v == 1]
         selected_count = len(cluster_indices)
         print(f"Decoded {selected_count} Medoid Indices: {cluster_indices}")
@@ -96,7 +66,6 @@ class KMedoidsQuboBuilder(QuboBuilder):
         return np.array(cluster_indices, dtype=int)
     
     def force_valid_k_solution(self, selected_indices, data, k):
-        """Force a solution with exactly k medoids by adding or removing indices."""
         current_count = len(selected_indices)
         
         if current_count < k:
@@ -151,13 +120,11 @@ class KMedoidsQuboBuilder(QuboBuilder):
             return selected_indices
     
     def _compute_corrloss(self, data):
-        """Compute Welsch M-estimator for measure of similiarity."""
         D = distance.squareform(distance.pdist(data, metric='euclidean'))
         W = 1 - np.exp(-D / 2)
         return W
     
     def _create_initial_clustering_bqm(self, data):
-        """Create the initial BQM without constraint."""
         N = len(data)
         alpha = 1 / self.n_clusters
         beta = 1 / N
@@ -173,7 +140,6 @@ class KMedoidsQuboBuilder(QuboBuilder):
         return dmd.BinaryQuadraticModel.from_qubo(Q)
     
     def build_kmedoids_auto_constraint(self, data):
-        """QUBO with automatic constraint penalty calculation."""
         N = len(data)
         alpha = 1 / self.n_clusters
         beta = 1 / N
@@ -203,7 +169,6 @@ class KMedoidsQuboBuilder(QuboBuilder):
         return initial_bqm.to_qubo()[0]
     
     def build_kmedoids_with_dimod_constraint(self, data):
-        """QUBO with original clustering terms and cleanly separated dimod constraint."""
         N = len(data)
         alpha = 1 / self.n_clusters
         beta = 1 / N
@@ -229,7 +194,6 @@ class KMedoidsQuboBuilder(QuboBuilder):
         return combined_bqm.to_qubo()[0]
     
     def build_kmedoids_quadratic_penalty(self, data):
-        """Build QUBO matrix with a single gamma penalty term for both clustering and k-constraint."""
         N = len(data)
         alpha = 1 / self.n_clusters
         beta = 1 / N

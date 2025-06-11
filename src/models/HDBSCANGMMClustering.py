@@ -10,20 +10,7 @@ class HDBSCANGMMClustering:
     def __init__(self, min_cluster_size=5, min_samples=None, cluster_selection_method='leaf', 
                  cluster_selection_epsilon=0.2, covariance_type='full', n_init=10,
                  metric='euclidean', random_state=42, config=None):
-        """
-        Initialize the HDBSCAN+GMM hybrid clustering model.
-        
-        Args:
-            min_cluster_size: The minimum size of clusters for HDBSCAN
-            min_samples: The number of samples in a neighborhood for a point to be considered a core point
-            cluster_selection_method: 'leaf' for standard clustering or 'eom' for more clusters
-            cluster_selection_epsilon: Controls cluster boundary smoothness
-            covariance_type: Type of covariance parameter for GMM ('full', 'tied', 'diag', 'spherical')
-            n_init: Number of GMM initializations to perform
-            metric: Distance metric to use
-            random_state: Random state for reproducibility
-            config: Configuration object (optional)
-        """
+
         self.min_cluster_size = min_cluster_size
         self.min_samples = min_samples if min_samples is not None else min_cluster_size
         self.cluster_selection_method = cluster_selection_method
@@ -40,16 +27,7 @@ class HDBSCANGMMClustering:
         self.membership_probs = None
 
     def find_optimal_k(self, embeddings):
-        """
-        Run HDBSCAN to identify clusters, then fit GMM to each cluster for probabilistic assignments.
-        
-        Args:
-            embeddings: Input embeddings to cluster
-            
-        Returns:
-            labels: Hard cluster labels for each point
-            medoid_indices: Indices of the cluster medoids
-        """
+
         print("Step 1: Running HDBSCAN to identify natural clusters...")
         
         self.hdbscan_model = HDBSCAN(
@@ -141,16 +119,7 @@ class HDBSCANGMMClustering:
         return labels, medoid_indices
 
     def _assign_noise_points(self, embeddings, labels):
-        """
-        Assign noise points to the nearest cluster.
-        
-        Args:
-            embeddings: Input embeddings
-            labels: Cluster labels from HDBSCAN
-            
-        Returns:
-            Updated labels with noise points assigned to clusters
-        """
+
         noise_indices = np.where(labels == -1)[0]
         noise_count = len(noise_indices)
         
@@ -191,15 +160,7 @@ class HDBSCANGMMClustering:
         return new_labels
     
     def _calculate_distance_based_probs(self, embeddings, cluster_points, cluster_id, cluster_idx):
-        """
-        Calculate distance-based probabilities as a fallback when GMM fails.
-        
-        Args:
-            embeddings: All data points
-            cluster_points: Points in this cluster
-            cluster_id: ID of the cluster
-            cluster_idx: Index of the cluster in the probabilities matrix
-        """
+
         print(f"  Using distance-based probabilities for cluster {cluster_id} as GMM fallback")
         
         cluster_center = np.mean(cluster_points, axis=0).reshape(1, -1)
@@ -214,26 +175,15 @@ class HDBSCANGMMClustering:
         self.membership_probs[:, cluster_idx] = np.exp(-0.5 * (distances / sigma)**2)
 
     def extract_medoids(self, embeddings, medoid_indices):
-        """Extract medoid embeddings from the data."""
         return embeddings[medoid_indices]
     
     def get_membership_probabilities(self):
-        """Return the membership probabilities for each document in each cluster."""
         if self.membership_probs is None:
             raise ValueError("Model has not been fit yet. Call find_optimal_k first.")
         return self.membership_probs
     
     def get_top_documents_per_cluster(self, doc_ids, n=5):
-        """
-        Get the top N documents that best represent each cluster.
-        
-        Args:
-            doc_ids: List of document IDs corresponding to the embeddings
-            n: Number of top documents to return per cluster
-            
-        Returns:
-            Dictionary mapping cluster_id to list of (doc_id, probability) tuples
-        """
+
         if self.membership_probs is None:
             raise ValueError("Model has not been fit yet. Call find_optimal_k first.")
         
@@ -252,13 +202,7 @@ class HDBSCANGMMClustering:
         return top_docs
     
     def save_cluster_membership(self, doc_ids, output_file):
-        """
-        Save cluster membership probabilities to CSV.
-        
-        Args:
-            doc_ids: List of document IDs
-            output_file: Path to save the CSV file
-        """
+
         import pandas as pd
         
         if self.membership_probs is None:

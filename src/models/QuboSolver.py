@@ -6,12 +6,7 @@ import dimod as dmd
 from src.models.QuboBuilder import QuboBuilder, KMedoidsQuboBuilder
 import json
 
-
 class QuboSolver:
-    """
-    Class dedicated to running QUBO solvers (quantum, hybrid, or simulated annealing).
-    Handles the actual solving process and fallback strategies.
-    """
     def __init__(self, n_clusters=None, num_reads=100, config=None):
         self.n_clusters = n_clusters
         self.num_reads = num_reads
@@ -19,10 +14,7 @@ class QuboSolver:
         self.problem_ids = []
     
     def run_QuboSolver(self, data, bqm_method='kmedoids'):
-        """
-        Legacy method to maintain compatibility with existing code.
-        Creates a builder and runs the solver.
-        """
+
         if self.n_clusters is None:
             raise ValueError("n_clusters must be specified for run_QuboSolver")
             
@@ -38,18 +30,7 @@ class QuboSolver:
         return self.solve(qubo_dict, self.n_clusters, data, builder)
     
     def solve(self, qubo_dict, n_clusters, data, builder):
-        """
-        Solve the QUBO problem using the specified solver.
-        
-        Args:
-            qubo_dict: The QUBO dictionary to solve
-            n_clusters: Number of clusters
-            data: Data points (for fallback strategies)
-            builder: The QuboBuilder instance used to build the QUBO
-            
-        Returns:
-            Cluster indices from the solution
-        """
+
         bqm = dmd.BinaryQuadraticModel.from_qubo(qubo_dict)
         solver_config = self.config.quantum_kmedoids
         
@@ -110,7 +91,6 @@ class QuboSolver:
                 )
     
     def _find_valid_k_sample(self, response, k):
-        """Find the first sample that satisfies the k-constraint"""
         for sample, energy in response.data(['sample', 'energy']):
             if sum(sample.values()) == k:
                 print(f"Found valid sample with exactly {k} medoids, energy: {energy}")
@@ -118,9 +98,7 @@ class QuboSolver:
         return None
     
     def _try_fallback_strategy_auto(self, response, sampler, sample_method, data, n_clusters, builder, **kwargs):
-        """
-        Try fallback strategies with auto-calculated penalty when initial solution is invalid.
-        """
+
         initial_bqm = builder._create_initial_clustering_bqm(data)
         base_penalty = initial_bqm.maximum_energy_delta()
         

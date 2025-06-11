@@ -8,16 +8,7 @@ from sklearn.metrics.pairwise import pairwise_distances
 class GMMClustering:
     def __init__(self, n_components_range=[10, 25, 50, 75, 100], 
                  covariance_type='full', n_init=10, random_state=42, config=None):
-        """
-        Initialize the GMM clustering model.
-        
-        Args:
-            n_components_range: Range of number of components to try
-            covariance_type: Type of covariance parameter ('full', 'tied', 'diag', 'spherical')
-            n_init: Number of initializations to perform
-            random_state: Random state for reproducibility
-            config: Configuration object (optional)
-        """
+
         self.n_components_range = n_components_range
         self.covariance_type = covariance_type
         self.n_init = n_init
@@ -29,16 +20,7 @@ class GMMClustering:
         self.membership_probs = None
 
     def find_optimal_k(self, embeddings):
-        """
-        Run GMM with BIC to find optimal number of components.
-        
-        Args:
-            embeddings: Input embeddings to cluster
-            
-        Returns:
-            labels: Hard cluster labels for each point (just for compatibility)
-            medoid_indices: Indices of the cluster medoids
-        """
+
         print("Finding optimal number of components for GMM...")
         
         best_bic = np.inf
@@ -104,26 +86,15 @@ class GMMClustering:
         return labels, medoid_indices
 
     def extract_medoids(self, embeddings, medoid_indices):
-        """Extract medoid embeddings from the data."""
         return embeddings[medoid_indices]
     
     def get_membership_probabilities(self):
-        """Return the membership probabilities for each document in each cluster."""
         if self.membership_probs is None:
             raise ValueError("Model has not been fit yet. Call find_optimal_k first.")
         return self.membership_probs
     
     def get_top_documents_per_cluster(self, doc_ids, n=5):
-        """
-        Get the top N documents that best represent each cluster.
-        
-        Args:
-            doc_ids: List of document IDs corresponding to the embeddings
-            n: Number of top documents to return per cluster
-            
-        Returns:
-            Dictionary mapping cluster_id to list of (doc_id, probability) tuples
-        """
+
         if self.membership_probs is None:
             raise ValueError("Model has not been fit yet. Call find_optimal_k first.")
         
@@ -142,13 +113,7 @@ class GMMClustering:
         return top_docs
     
     def save_cluster_membership(self, doc_ids, output_file):
-        """
-        Save cluster membership probabilities to CSV.
-        
-        Args:
-            doc_ids: List of document IDs
-            output_file: Path to save the CSV file
-        """
+
         import pandas as pd
         
         if self.membership_probs is None:

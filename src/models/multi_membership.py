@@ -1,23 +1,7 @@
 def create_multi_membership_assignments(doc_ids, embeddings, initial_probs, quantum_labels, 
                                   quantum_medoid_indices, refined_medoid_embeddings, 
                                   threshold=0.2, data_dir=None, prefix=''):
-    """
-    Create multi-membership cluster assignments based on probability thresholds.
-    
-    Args:
-        doc_ids: List of document IDs
-        embeddings: Document embeddings used for calculating distances
-        initial_probs: Initial membership probabilities (from GMM or HDBSCAN-GMM)
-        quantum_labels: Quantum-refined hard cluster labels
-        quantum_medoid_indices: Quantum-refined medoid indices
-        refined_medoid_embeddings: Embeddings of quantum-refined medoids
-        threshold: Probability threshold for multi-membership (default: 0.2)
-        data_dir: Data directory to save results
-        prefix: Prefix for output files ('hdbscan-gmm' or other)
-        
-    Returns:
-        DataFrame with multi-membership assignments
-    """
+
     import numpy as np
     import pandas as pd
     import os

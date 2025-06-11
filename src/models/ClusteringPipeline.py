@@ -1,12 +1,3 @@
-"""
-Refactored Clustering Pipeline with Clean Architecture - FIXED VERSION
-
-This module provides a clean, modular clustering pipeline with separate concerns
-for data management, clustering, evaluation, and visualization.
-
-Fixed to maintain exact compatibility with original implementation.
-"""
-
 import os
 import json
 import datetime
@@ -36,10 +27,8 @@ from src.plot_utils import (plot_embeddings, load_colormap, plot_cluster_spectru
 
 warnings.filterwarnings("ignore")
 
-
 @dataclass
 class ClusteringResults:
-    """Data class to hold clustering results."""
     labels: np.ndarray
     medoid_indices: np.ndarray
     medoid_embeddings: np.ndarray
@@ -53,7 +42,6 @@ class ClusteringResults:
 
 @dataclass
 class EvaluationMetrics:
-    """Data class to hold evaluation metrics."""
     ndcg_10: float
     relevant_coverage: float
     ndcg_multi_10: Optional[float] = None
@@ -62,7 +50,6 @@ class EvaluationMetrics:
 
 @dataclass
 class RunConfiguration:
-    """Configuration for a clustering run."""
     method: str
     colormap: str
     multi_membership: bool
@@ -73,7 +60,6 @@ class RunConfiguration:
 
 
 class DataManager:
-    """Handles data loading, parsing, and file operations."""
     
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
@@ -82,11 +68,9 @@ class DataManager:
     
     @staticmethod
     def parse_embedding(text: str) -> np.ndarray:
-        """Parse embedding string to numpy array."""
         return np.fromstring(text[1:-1], dtype=float, sep=',')
     
     def load_document_data(self) -> Tuple[np.ndarray, List[str]]:
-        """Load document embeddings and IDs."""
         df = pd.read_csv(self.embeddings_file, 
                         converters={"doc_embeddings": self.parse_embedding})
         embeddings = np.stack(df["doc_embeddings"].values)
@@ -94,7 +78,6 @@ class DataManager:
         return embeddings, doc_ids
     
     def load_query_data(self) -> pd.DataFrame:
-        """Load and process query data."""
         df = pd.read_csv(self.queries_file)
         df['query_embeddings'] = df['query_embeddings'].apply(
             lambda x: self.parse_embedding(x) if isinstance(x, str) else x
@@ -102,7 +85,6 @@ class DataManager:
         return self._validate_and_deduplicate_queries(df)
     
     def _validate_and_deduplicate_queries(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Validate and deduplicate query data - EXACT reproduction of original logic."""
         valid_queries = df[df['query_embeddings'].apply(lambda x: isinstance(x, np.ndarray) and len(x) > 0)]
         
         if len(valid_queries) > 0:
@@ -127,22 +109,18 @@ class DataManager:
 
 
 class ClusteringStrategy(ABC):
-    """Abstract base class for clustering strategies."""
     
     @abstractmethod
     def cluster(self, embeddings: np.ndarray, original_embeddings: np.ndarray, 
                plot_embeddings: np.ndarray, config: Any) -> ClusteringResults:
-        """Perform clustering and return results."""
         pass
     
     @abstractmethod
     def supports_probabilities(self) -> bool:
-        """Return True if this method provides membership probabilities."""
         pass
 
 
 class ClassicalClusteringStrategy(ClusteringStrategy):
-    """Strategy for classical K-medoids clustering."""
     
     def cluster(self, embeddings: np.ndarray, original_embeddings: np.ndarray, 
                plot_embeddings: np.ndarray, config: Any) -> ClusteringResults:
@@ -172,7 +150,6 @@ class ClassicalClusteringStrategy(ClusteringStrategy):
 
 
 class HDBSCANClusteringStrategy(ClusteringStrategy):
-    """Strategy for HDBSCAN clustering."""
     
     def cluster(self, embeddings: np.ndarray, original_embeddings: np.ndarray, 
                plot_embeddings: np.ndarray, config: Any) -> ClusteringResults:
@@ -206,7 +183,6 @@ class HDBSCANClusteringStrategy(ClusteringStrategy):
 
 
 class GMMClusteringStrategy(ClusteringStrategy):
-    """Strategy for Gaussian Mixture Model clustering."""
     
     def cluster(self, embeddings: np.ndarray, original_embeddings: np.ndarray, 
                plot_embeddings: np.ndarray, config: Any) -> ClusteringResults:
@@ -237,7 +213,6 @@ class GMMClusteringStrategy(ClusteringStrategy):
 
 
 class HDBSCANGMMClusteringStrategy(ClusteringStrategy):
-    """Strategy for HDBSCAN-GMM hybrid clustering."""
     
     def cluster(self, embeddings: np.ndarray, original_embeddings: np.ndarray, 
                plot_embeddings: np.ndarray, config: Any) -> ClusteringResults:
@@ -268,7 +243,6 @@ class HDBSCANGMMClusteringStrategy(ClusteringStrategy):
 
 
 class ClusteringStrategyFactory:
-    """Factory for creating clustering strategies."""
     
     _strategies = {
         'classical': ClassicalClusteringStrategy,
@@ -279,14 +253,12 @@ class ClusteringStrategyFactory:
     
     @classmethod
     def create(cls, method: str) -> ClusteringStrategy:
-        """Create a clustering strategy instance."""
         if method not in cls._strategies:
             raise ValueError(f"Unknown clustering method: {method}")
         return cls._strategies[method]()
 
 
 class ClusterRefinement:
-    """Handles cluster refinement using quantum annealing or second-stage clustering."""
     
     def __init__(self, config: Any):
         self.config = config
@@ -301,7 +273,6 @@ class ClusterRefinement:
                        use_second_stage: bool,
                        doc_ids: List[str],
                        output_dir: str) -> ClusteringResults:
-        """Refine clusters using the specified method."""
         
         if use_annealing:
             return self._quantum_refinement(initial_results, embeddings, original_embeddings, 
@@ -315,7 +286,6 @@ class ClusterRefinement:
     def _quantum_refinement(self, initial_results: ClusteringResults, embeddings: np.ndarray,
                            original_embeddings: np.ndarray, plot_embeddings: np.ndarray,
                            doc_ids: List[str], output_dir: str, method: str) -> ClusteringResults:
-        """Apply quantum annealing refinement - EXACT reproduction of original logic."""
         print("Using quantum annealing for cluster refinement...")
         quantum_clustering = QuantumClustering(
             self.config.quantum_clustering.k_range,
@@ -375,7 +345,6 @@ class ClusterRefinement:
     def _second_stage_refinement(self, initial_results: ClusteringResults,
                                embeddings: np.ndarray, original_embeddings: np.ndarray,
                                plot_embeddings: np.ndarray) -> ClusteringResults:
-        """Apply second-stage classical clustering refinement."""
         print("Using second-stage classical clustering for refinement...")
         clustering = ClassicalClustering(**self.config.classical_clustering)
         
@@ -403,7 +372,6 @@ class ClusterRefinement:
         )
     
     def _find_best_k_with_qubo(self, quantum_clustering, medoid_embeddings):
-        """Find best k using QUBO clustering - EXACT reproduction."""
         best_k = None
         best_dbi = float("inf")
         best_indices = None
@@ -421,11 +389,9 @@ class ClusterRefinement:
 
 
 class EvaluationEngine:
-    """Handles retrieval evaluation and metrics calculation - EXACT reproduction of original."""
     
     @staticmethod
     def dcg_at_k(r: np.ndarray, k: int) -> float:
-        """Calculate Discounted Cumulative Gain at rank k."""
         r = np.asfarray(r)[:k]
         if r.size:
             return r[0] + np.sum(r[1:] / np.log2(np.arange(3, r.size + 2)))
@@ -433,7 +399,6 @@ class EvaluationEngine:
     
     @staticmethod
     def ndcg_at_k(r: List[float], k: int) -> float:
-        """Calculate Normalized Discounted Cumulative Gain at rank k."""
         dcg_max = EvaluationEngine.dcg_at_k(sorted(r, reverse=True), k)
         if not dcg_max:
             return 0.0
@@ -448,10 +413,7 @@ class EvaluationEngine:
                          doc_ids: List[str],
                          k: int = 10,
                          multi_cluster_assignments: Optional[pd.DataFrame] = None) -> EvaluationMetrics:
-        """
-        Evaluate retrieval performance using nDCG@k and relevant coverage, with multi-membership support.
-        EXACT reproduction of original evaluation logic.
-        """
+
         doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(doc_ids)}
         
         query_embeddings_norm = normalize(query_embeddings)
@@ -597,14 +559,12 @@ class EvaluationEngine:
 
 
 class VisualizationManager:
-    """Handles all visualization and plotting operations."""
     
     def __init__(self, colormap_name: str, colormaps_dir: str):
         self.cmap = load_colormap(colormap_name, colormaps_dir)
         self.colormap_name = colormap_name
     
     def create_initial_colors(self, labels: np.ndarray) -> Dict[int, Any]:
-        """Create color mapping for initial clusters."""
         unique_labels = np.unique(labels)
         n_clusters = len(unique_labels)
         
@@ -620,7 +580,6 @@ class VisualizationManager:
     
     def plot_umap_reduction(self, umap_embeddings: np.ndarray, 
                           save_path: str, method: str, timestamp: str):
-        """Plot UMAP dimensionality reduction."""
         title = f"UMAP Reduction\nMethod: {method.upper()}, {timestamp}"
         plot_embeddings(umap_embeddings, title=title, save_path=save_path, cmap=self.cmap)
     
@@ -628,7 +587,6 @@ class VisualizationManager:
                               results: ClusteringResults,
                               save_path: str, method: str, timestamp: str,
                               initial_colors: Dict[int, Any]):
-        """Plot initial clustering results."""
         title = f"{method.upper()} Clustering\nk={results.n_clusters}, DBI={results.dbi_score:.4f}, {timestamp}"
         plot_embeddings(umap_embeddings, labels=results.labels, 
                        medoids=results.medoid_embeddings_plot, title=title,
@@ -641,7 +599,6 @@ class VisualizationManager:
                             save_path: str, method: str, refinement: str,
                             timestamp: str, initial_colors: Dict[int, Any],
                             color_correspondence: Dict[int, int]):
-        """Plot final clustering results."""
         title = (f"Final {refinement.capitalize()} Cluster Assignments\n"
                 f"Method: {method.upper()}, k={final_results.n_clusters}, "
                 f"DBI={final_results.dbi_score:.4f}, {timestamp}")
@@ -660,7 +617,6 @@ class VisualizationManager:
                                          save_dir: str, method: str,
                                          final_results: ClusteringResults,
                                          timestamp: str):
-        """Plot merged clusters visualization."""
         plot_top_merged_clusters(
             umap_embeddings,
             initial_labels,
@@ -680,7 +636,6 @@ class VisualizationManager:
                                           save_path: str, method: str, timestamp: str,
                                           initial_colors: Dict[int, Any],
                                           color_correspondence: Dict[int, int]):
-        """Plot cluster color spectrum."""
         spectrum_title = ("Cluster Color Spectrum\n" + 
                          f"Method: {method.upper()}, k={final_results.n_clusters}, "
                          f"DBI={final_results.dbi_score:.4f}, {timestamp}")
@@ -699,27 +654,23 @@ class VisualizationManager:
 
 
 class ResultsManager:
-    """Manages saving and tracking of results."""
     
     def __init__(self, output_dir: str):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def save_embeddings(self, **kwargs):
-        """Save various embedding arrays."""
         for name, data in kwargs.items():
             if data is not None:
                 np.save(self.output_dir / f"{name}.npy", data)
     
     def save_cluster_mapping(self, doc_ids: List[str], labels: np.ndarray, 
                            filename: str = "doc_clusters.csv"):
-        """Save document to cluster mapping."""
         df = pd.DataFrame({'doc_id': doc_ids, 'cluster': labels})
         df.to_csv(self.output_dir / filename, index=False)
     
     def save_initial_clustering_results(self, initial_labels: np.ndarray, doc_ids: List[str], 
                                       method_name: str, timestamp: str):
-        """Save information about initial clustering results - EXACT reproduction."""
         initial_cluster_mapping = pd.DataFrame({
             'doc_id': doc_ids,
             'initial_cluster': initial_labels
@@ -778,7 +729,6 @@ class ResultsManager:
     
     def compare_cluster_distributions(self, initial_labels: np.ndarray, 
                                     final_labels: np.ndarray, method: str, timestamp: str):
-        """Compare initial and final cluster distributions - EXACT reproduction."""
         try:
             initial_sizes = pd.Series(initial_labels).value_counts()
             final_sizes = pd.Series(final_labels).value_counts()
@@ -845,13 +795,11 @@ class ResultsManager:
             print(f"Error creating cluster distribution comparison: {str(e)}")
     
     def save_run_info(self, run_info: Dict[str, Any], timestamp: str):
-        """Save run information as JSON."""
         with open(self.output_dir / f"run_info_{timestamp}.json", 'w') as f:
             json.dump(run_info, f, indent=2)
     
     def track_cluster_correspondence(self, initial_labels: np.ndarray, 
                                    final_labels: np.ndarray) -> Dict[int, int]:
-        """Track correspondence between initial and final clusters - EXACT reproduction."""
         correspondence = {}
         
         overlap_counts = defaultdict(lambda: defaultdict(int))
@@ -877,7 +825,6 @@ class ResultsManager:
     
     def save_probabilistic_results(self, clustering_object, doc_ids: List[str], 
                                  method: str, output_dir: str):
-        """Save probabilistic clustering results if available."""
         if hasattr(clustering_object, 'get_membership_probabilities'):
             membership_probs = clustering_object.get_membership_probabilities()
             np.save(Path(output_dir) / f"{method}_membership_probs.npy", membership_probs)
@@ -898,7 +845,6 @@ class ResultsManager:
 
 
 class ClusteringPipeline:
-    """Main clustering pipeline orchestrator - EXACT reproduction of original logic."""
     
     def __init__(self, config: Any, data_dir: str, colormaps_dir: str):
         self.config = config
@@ -908,7 +854,6 @@ class ClusteringPipeline:
         self.evaluator = EvaluationEngine()
     
     def run(self, run_config: RunConfiguration) -> Dict[str, Any]:
-        """Execute the complete clustering pipeline."""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
         np.random.seed(self.config.classical_clustering.random_state)
@@ -1079,7 +1024,6 @@ class ClusteringPipeline:
         return run_info
     
     def _get_refinement_method(self, run_config: RunConfiguration) -> str:
-        """Determine the refinement method being used."""
         if run_config.annealing:
             return "quantum"
         elif run_config.second_stage and run_config.method == 'classical':
@@ -1090,7 +1034,6 @@ class ClusteringPipeline:
     def _create_quantum_probabilities(self, initial_results: ClusteringResults,
                                     final_results: ClusteringResults, n_docs: int,
                                     output_dir: Path) -> np.ndarray:
-        """Create quantum probabilities from initial probabilities - EXACT reproduction."""
         n_quantum_clusters = len(np.unique(final_results.labels))
         quantum_probs = np.zeros((n_docs, n_quantum_clusters))
 
@@ -1125,7 +1068,6 @@ class ClusteringPipeline:
     def _evaluate_pipeline(self, query_df: pd.DataFrame, doc_embeddings: np.ndarray,
                           final_results: ClusteringResults, doc_ids: List[str],
                           multi_membership_df: Optional[pd.DataFrame]) -> EvaluationMetrics:
-        """Evaluate the clustering pipeline - EXACT reproduction of original evaluation."""
         if len(query_df) == 0:
             print("No valid queries found for evaluation.")
             return EvaluationMetrics(ndcg_10=0.0, relevant_coverage=0.0)
@@ -1162,7 +1104,6 @@ class ClusteringPipeline:
                         evaluation_metrics: EvaluationMetrics,
                         multi_membership_df: Optional[pd.DataFrame],
                         refinement_method: str) -> Dict[str, Any]:
-        """Create comprehensive run information dictionary - EXACT reproduction."""
         
         run_info = {
             'timestamp': timestamp,
@@ -1201,7 +1142,6 @@ class ClusteringPipeline:
         return run_info
     
     def _extract_hyperparameters(self, run_config: RunConfiguration) -> Dict[str, Any]:
-        """Extract hyperparameters for the run."""
         hyperparams = {}
         
         if run_config.method == 'classical':
@@ -1221,7 +1161,6 @@ class ClusteringPipeline:
         return hyperparams
     
     def _print_summary(self, run_info: Dict[str, Any], output_dir: str):
-        """Print a summary of the clustering run - EXACT reproduction."""
         print("\n=== Clustering Run Summary ===")
         print(f"Timestamp: {run_info['timestamp']}")
         print(f"Method: {run_info['clustering_method']}" + 
@@ -1247,7 +1186,6 @@ class ClusteringPipeline:
 
 
 def create_pipeline_from_config(config_path: str, data_dir: str, colormaps_dir: str) -> ClusteringPipeline:
-    """Factory function to create a pipeline from configuration files."""
     import yaml
     from box import ConfigBox
     
@@ -1313,7 +1251,6 @@ def create_pipeline_from_config(config_path: str, data_dir: str, colormaps_dir: 
 
 
 def main():
-    """Main entry point with command line argument parsing - EXACT reproduction of original."""
     import argparse
     import yaml
     from box import ConfigBox

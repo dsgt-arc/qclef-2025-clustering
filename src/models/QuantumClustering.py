@@ -13,7 +13,6 @@ class QuantumClustering:
         self.problem_ids = []
 
     def solve_qubo(self, medoid_embeddings, k):
-        """Run QUBO clustering for a given k (no longer searching for best k inside this function)."""
         print(f"Solving QUBO for k={k}")
 
         builder = KMedoidsQuboBuilder(n_clusters=k, config=self.config)
@@ -39,7 +38,6 @@ class QuantumClustering:
 
 
 def compute_clusters(data, medoid_indices):
-    """Assign each point to the closest medoid."""
     if len(medoid_indices) == 0:
         raise ValueError("No medoids selected. QUBO Solver likely failed. Investigate `refined_medoid_indices` output.")
 
@@ -52,20 +50,7 @@ def compute_clusters(data, medoid_indices):
 
 def prepare_clustering_submission(doc_embeddings, doc_ids, final_cluster_labels, refined_medoid_indices, 
                              run_output_dir, clustering_method, config, problem_ids=None):
-    """
-    Prepare submission file for the quantum clustering competition.
-    Uses original embeddings for centroid coordinates.
-    
-    Args:
-        doc_embeddings: Document embeddings (ORIGINAL space, not reduced)
-        doc_ids: List of document IDs
-        final_cluster_labels: Final cluster assignments
-        refined_medoid_indices: Indices of refined medoids
-        run_output_dir: Directory to save results
-        clustering_method: Which clustering method was used
-        config: Configuration object
-        problem_ids: List of problem IDs from quantum annealing submissions
-    """
+
     print("\nPreparing submission file for quantum clustering competition...")
     print(f"Using original embeddings with shape: {doc_embeddings.shape}")
     

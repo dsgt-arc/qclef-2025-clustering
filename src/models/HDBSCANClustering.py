@@ -8,18 +8,7 @@ from sklearn.metrics.pairwise import pairwise_distances
 class HDBSCANClustering:
     def __init__(self, min_cluster_size=5, min_samples=None, cluster_selection_method='eom', 
                  cluster_selection_epsilon=0.0, metric='euclidean', random_state=42, config=None):
-        """
-        Initialize the HDBSCAN clustering model with overclustering.
-        
-        Args:
-            min_cluster_size: The minimum size of clusters
-            min_samples: The number of samples in a neighborhood for a point to be considered a core point
-            cluster_selection_method: 'eom' for overclustering, 'leaf' for standard clustering
-            cluster_selection_epsilon: Smaller values create more clusters (for overclustering)
-            metric: Distance metric to use
-            random_state: Random state for reproducibility
-            config: Configuration object (optional)
-        """
+
         self.min_cluster_size = min_cluster_size
         self.min_samples = min_samples if min_samples is not None else min_cluster_size
         self.cluster_selection_method = cluster_selection_method
@@ -32,16 +21,7 @@ class HDBSCANClustering:
         self.best_k = None
 
     def find_optimal_k(self, embeddings):
-        """
-        Run HDBSCAN clustering with overclustering and find the medoid indices.
-        
-        Args:
-            embeddings: Input embeddings to cluster
-            
-        Returns:
-            labels: Cluster labels for each point
-            medoid_indices: Indices of the cluster medoids
-        """
+
         self.model = HDBSCAN(
             min_cluster_size=self.min_cluster_size,
             min_samples=self.min_samples,
@@ -95,21 +75,10 @@ class HDBSCANClustering:
         return labels, medoid_indices
 
     def extract_medoids(self, embeddings, medoid_indices):
-        """Extract medoid embeddings from the data."""
         return embeddings[medoid_indices]
     
     def handle_noise_points(self, embeddings, labels, medoid_indices):
-        """
-        Assign noise points to the nearest cluster.
-        
-        Args:
-            embeddings: Input embeddings
-            labels: Cluster labels from HDBSCAN
-            medoid_indices: Indices of cluster medoids
-            
-        Returns:
-            Updated labels with noise points assigned to clusters
-        """
+
         noise_indices = np.where(labels == -1)[0]
         
         if len(noise_indices) == 0:
