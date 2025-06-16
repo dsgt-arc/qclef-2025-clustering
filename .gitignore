@@ -1,0 +1,4 @@
+.venv/
+.env
+qclef_2025_clustering.egg*
+data/

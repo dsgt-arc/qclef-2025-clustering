@@ -1,0 +1,7 @@
+hdbscan_clustering:
+  min_cluster_size: 5
+  min_samples: null
+  cluster_selection_method: 'leaf'
+  cluster_selection_epsilon: 0.2
+  metric: 'euclidean'
+  random_state: 42

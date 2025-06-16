@@ -1,0 +1,17 @@
+classical_clustering:
+  metric: 'euclidean'
+  k_range: [25]
+  random_state: 42
+
+quantum_kmedoids:
+  use_quantum: false
+  use_hybrid: false
+  gamma: 1
+  gamma_constraint: 8
+  random_state: 42
+
+second_stage_clustering:
+  enabled: true
+  k_range: [10, 25, 50]
+  metric: 'euclidean'
+  random_state: 42

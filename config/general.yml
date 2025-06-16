@@ -1,0 +1,6 @@
+general:
+  reduction: True
+  annealing: True
+
+quantum_clustering:
+  k_range: [10]

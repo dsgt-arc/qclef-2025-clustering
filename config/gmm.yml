@@ -1,0 +1,5 @@
+gmm_clustering:
+  n_components_range: [10, 25, 50, 75, 100]
+  covariance_type: 'full'
+  n_init: 10
+  random_state: 42
